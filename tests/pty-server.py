@@ -8,7 +8,7 @@ import sys
 
 child, master = pty.fork()
 if child == 0:
-    os.environ.update(PS1="", PS2="", ENV="")
+    os.environ.update(PS1=os.environ.get("PTY_TEST_PS1", ""), PS2="", ENV="")
     os.execvp(sys.argv[1], sys.argv[1:])
 
 def stop(*_):

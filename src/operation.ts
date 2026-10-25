@@ -85,27 +85,31 @@ export class PushOperation {
     feedFromSession(data: Buffer): Buffer {
         this.touch()
         try {
-            const output = this.parser.feed(data)
-            if (this.phase !== 'transfer' || (this.error && this.receiverReturned))
-                return Buffer.alloc(0)
-            if (this.handshakeSeen) return output
-            // Upstream detects a handshake within a single output buffer. SSH can split it.
-            this.handshake = Buffer.concat([this.handshake, output])
-            if (
-                /::TRZSZ:TRANSFER:[RD]:\d+\.\d+\.\d+:\d+(?::\d+)*[\r\n]/.test(
-                    this.handshake.toString(),
-                )
-            ) {
-                this.handshakeSeen = true
-                const result = this.handshake
-                this.handshake = Buffer.alloc(0)
-                return result
-            }
-            if (this.handshake.length > 65536)
-                this.fail(new Error('接收端未返回有效的 trzsz 握手。'))
+            // Filter each span in wire order: STOPPED and the shell prompt may share a packet.
+            return this.parser.feed(data, (output) => this.filterOutput(output))
         } catch (error) {
             this.fail(error instanceof Error ? error : new Error(String(error)))
         }
+        return Buffer.alloc(0)
+    }
+
+    private filterOutput(output: Buffer): Buffer {
+        // Cleanup has restored the TTY. Keep forwarding even while local cleanup is pending.
+        if (this.stopSeen) return output
+        if (this.phase !== 'transfer' || (this.error && this.receiverReturned))
+            return Buffer.alloc(0)
+        if (this.handshakeSeen) return output
+        // Upstream detects a handshake within a single output buffer. SSH can split it.
+        this.handshake = Buffer.concat([this.handshake, output])
+        if (
+            /::TRZSZ:TRANSFER:[RD]:\d+\.\d+\.\d+:\d+(?::\d+)*[\r\n]/.test(this.handshake.toString())
+        ) {
+            this.handshakeSeen = true
+            const result = this.handshake
+            this.handshake = Buffer.alloc(0)
+            return result
+        }
+        if (this.handshake.length > 65536) this.fail(new Error('接收端未返回有效的 trzsz 握手。'))
         return Buffer.alloc(0)
     }
 
@@ -163,12 +167,17 @@ export class PushOperation {
         if (message === 'STOPPED') {
             this.stopSeen = true
             this.stopped?.()
-            return
         }
         if (message.startsWith('ERROR:')) {
             this.remoteStopping = true
             this.fail(remoteError(message.slice(6)))
             return
+        }
+        // Write completion before allowing the following shell prompt through, even if both
+        // arrive in one buffer (promise continuations run only after feedFromSession returns).
+        if (!this.error) {
+            if (message === 'BOOTSTRAP_DONE') this.options.status('trz 和 tsz 已就绪。')
+            if (message === 'DONE') this.options.status('上传完成。')
         }
         if (this.waiting && message.startsWith(this.waiting.prefix)) {
             const waiter = this.waiting
@@ -202,6 +211,11 @@ export class PushOperation {
     private send(text: string): void {
         if (this.error) throw this.error
         this.write(Buffer.from(text))
+    }
+
+    private async finish(frame: 'DONE' | 'BOOTSTRAP_DONE'): Promise<void> {
+        await this.wait(frame)
+        await this.wait('STOPPED')
     }
 
     private async transfer(localPath: string, received: string): Promise<void> {
@@ -242,8 +256,7 @@ export class PushOperation {
             if (this.options.bootstrapOnly && probe[3] === '1') {
                 if (probe[4] === '1') {
                     this.send('USE\n')
-                    await this.wait('BOOTSTRAP_DONE')
-                    this.options.status('trz 和 tsz 已就绪。')
+                    await this.finish('BOOTSTRAP_DONE')
                     return
                 }
 
@@ -261,8 +274,7 @@ export class PushOperation {
                 this.send(`USE:${tools.tsz.length}\n`)
                 await this.transfer(staged.path, 'SENDER_RECEIVED')
                 await this.wait('SENDER_DONE')
-                await this.wait('BOOTSTRAP_DONE')
-                this.options.status('trz 和 tsz 已就绪。')
+                await this.finish('BOOTSTRAP_DONE')
                 return
             }
 
@@ -317,16 +329,14 @@ export class PushOperation {
                 await this.wait('SENDER_DONE')
             }
             if (this.options.bootstrapOnly) {
-                await this.wait('BOOTSTRAP_DONE')
-                this.options.status('trz 和 tsz 已就绪。')
+                await this.finish('BOOTSTRAP_DONE')
                 return
             }
             await this.wait('READY')
             this.options.status('通过 trzsz 上传文件…')
             if (!this.options.localPath) throw new Error('缺少待上传的本地文件。')
             await this.transfer(this.options.localPath, 'RECEIVED')
-            await this.wait('DONE')
-            this.options.status('上传完成。')
+            await this.finish('DONE')
         } catch (error) {
             const failure = error instanceof Error ? error : new Error(String(error))
             this.fail(failure)

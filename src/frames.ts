@@ -10,7 +10,7 @@ export class FrameParser {
         this.prefix = Buffer.from(`\x1ePT${token}:`)
     }
 
-    feed(data: Buffer): Buffer {
+    feed(data: Buffer, filterOutput: (data: Buffer) => Buffer = (data) => data): Buffer {
         this.pending = Buffer.concat([this.pending, data])
         const output: Buffer[] = []
         while (this.pending.length) {
@@ -19,11 +19,11 @@ export class FrameParser {
                 let keep = Math.min(this.prefix.length - 1, this.pending.length)
                 while (keep && !this.pending.subarray(-keep).equals(this.prefix.subarray(0, keep)))
                     keep--
-                output.push(this.pending.subarray(0, this.pending.length - keep))
+                output.push(filterOutput(this.pending.subarray(0, this.pending.length - keep)))
                 this.pending = this.pending.subarray(this.pending.length - keep)
                 break
             }
-            output.push(this.pending.subarray(0, start))
+            output.push(filterOutput(this.pending.subarray(0, start)))
             this.pending = this.pending.subarray(start)
             const end = this.pending.indexOf(0x1f, this.prefix.length)
             if (end === -1) {

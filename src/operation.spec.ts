@@ -35,6 +35,7 @@ async function fixture(
         data?: Buffer
         minimalPath?: boolean
         receiverDirectory?: string
+        prompt?: string
     } = {},
 ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "push-test ' -"))
@@ -54,6 +55,7 @@ async function fixture(
                 ...process.env,
                 HOME: root,
                 PATH: bin,
+                PTY_TEST_PS1: options.prompt ?? '',
             },
         },
     )
@@ -115,6 +117,7 @@ async function fixture(
         child.stdin.write(buffer)
     })
     let transcript = ''
+    let displayed = ''
     child.stderr.on('data', (buffer) => {
         transcript += buffer.toString()
     })
@@ -127,6 +130,7 @@ async function fixture(
         // Force a handshake and every status frame to cross SSH output boundaries.
         for (let offset = 0; offset < buffer.length; offset += 7) {
             const output = operation.feedFromSession(buffer.subarray(offset, offset + 7))
+            displayed += output.toString()
             if (output.length) client.processServerOutput(output)
         }
     })
@@ -149,10 +153,50 @@ async function fixture(
         options: operationOptions,
         operation,
         transcript: () => transcript,
+        displayed: () => displayed,
     }
 }
 
 describe('push over a real PTY', () => {
+    it.each([['/bin/sh'], ['/usr/bin/busybox', 'ash'], ['/bin/bash', '--norc']])(
+        'preserves the shell prompt after bootstrap under %j without extra input',
+        async (...shell) => {
+            const prompt = 'PUSH_TEST_PROMPT> '
+            const f = await fixture({ shell, prompt })
+            f.options.bootstrapOnly = true
+            // Allow the initial prompt to arrive before injecting the worker.
+            await new Promise((resolve) => setTimeout(resolve, 100))
+            await f.operation.run()
+            await new Promise((resolve) => setTimeout(resolve, 100))
+            expect(f.transcript()).toContain(prompt)
+            expect(f.displayed()).toContain(prompt)
+        },
+    )
+
+    it.each(['installed', 'sender', 'push'])(
+        'preserves the prompt with the published client after %s',
+        async (mode) => {
+            const prompt = 'PUSH_TEST_PROMPT> '
+            const f = await fixture({
+                published: true,
+                shell: ['/usr/bin/busybox', 'ash'],
+                prompt,
+            })
+            await fs.mkdir(path.dirname(f.receiverPath), { recursive: true })
+            await fs.writeFile(f.receiverPath, f.receiver, { mode: 0o700 })
+            if (mode === 'installed')
+                await fs.writeFile(path.join(path.dirname(f.receiverPath), 'tsz'), f.sender, {
+                    mode: 0o700,
+                })
+            f.options.bootstrapOnly = mode !== 'push'
+            await new Promise((resolve) => setTimeout(resolve, 100))
+            await f.operation.run()
+            await new Promise((resolve) => setTimeout(resolve, 100))
+            expect(f.displayed()).toContain(prompt)
+            expect(f.statuses.at(-1)).toBe(mode === 'push' ? '上传完成。' : 'trz 和 tsz 已就绪。')
+        },
+    )
+
     it.each([false, true])(
         'bootstraps, uploads and commits using published plugin=%s',
         async (published) => {
