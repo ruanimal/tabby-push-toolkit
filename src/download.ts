@@ -62,6 +62,11 @@ export function electronDownloader(net: ElectronNet, timeoutMs = 60000): Downloa
                     finish(new Error(`下载接收端失败：HTTP ${response.statusCode}（${url}）。`))
                     return
                 }
+                // Register terminal events before data: adding a data listener
+                // starts the main-process stream immediately, while remote calls
+                // arrive separately. A fast response can otherwise finish first.
+                response.on('aborted', () => finish(new Error('接收端下载内容被截断。')))
+                response.on('end', () => finish())
                 response.on('data', (data: Buffer) => {
                     if (settled) return
                     refreshTimeout()
@@ -73,8 +78,6 @@ export function electronDownloader(net: ElectronNet, timeoutMs = 60000): Downloa
                     }
                     chunks.push(chunk)
                 })
-                response.on('aborted', () => finish(new Error('接收端下载内容被截断。')))
-                response.on('end', () => finish())
             })
             try {
                 request.setHeader('User-Agent', 'tabby-push-toolkit')

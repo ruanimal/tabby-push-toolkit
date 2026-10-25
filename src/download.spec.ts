@@ -29,6 +29,50 @@ describe('Electron receiver downloads', () => {
         })
     })
 
+    it('completes a fast HTTP response that ends as soon as the data listener is attached', async () => {
+        const f = fixture(20)
+        const pending = f.download(
+            'http://192.168.10.20:8000/trzsz-v1.3.0-all-platform.tar.gz',
+            new AbortController().signal,
+            100,
+        )
+        const data = Buffer.from('fast LAN response')
+        const on = f.response.on.bind(f.response)
+        vi.spyOn(f.response, 'on').mockImplementation((event, listener) => {
+            on(event, listener)
+            if (event === 'data') {
+                // A main-process stream can drain before the next remote .on() call.
+                f.response.emit('data', data)
+                f.response.emit('end')
+            }
+            return f.response
+        })
+        f.request.emit('response', f.response)
+        expect(await pending).toEqual(data)
+        expect(f.request.abort).not.toHaveBeenCalled()
+    })
+
+    it('rejects a fast response aborted immediately after its first chunk', async () => {
+        const f = fixture(20)
+        const pending = f.download(
+            'http://192.168.10.20:8000/file',
+            new AbortController().signal,
+            100,
+        )
+        const on = f.response.on.bind(f.response)
+        vi.spyOn(f.response, 'on').mockImplementation((event, listener) => {
+            on(event, listener)
+            if (event === 'data') {
+                f.response.emit('data', Buffer.from('partial'))
+                f.response.emit('aborted')
+            }
+            return f.response
+        })
+        f.request.emit('response', f.response)
+        await expect(pending).rejects.toThrow('截断')
+        expect(f.request.abort).toHaveBeenCalledOnce()
+    })
+
     it('rejects HTTP errors and oversized responses', async () => {
         for (const failure of ['HTTP 404', '大小限制']) {
             const f = fixture()
