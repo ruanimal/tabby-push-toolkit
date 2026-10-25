@@ -36,6 +36,7 @@ async function fixture(
         minimalPath?: boolean
         receiverDirectory?: string
         prompt?: string
+        nativeDecoder?: boolean
     } = {},
 ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "push-test ' -"))
@@ -43,6 +44,7 @@ async function fixture(
     await fs.mkdir(bin)
     const tools = ['sh', 'mkdir', 'rm', 'mv', 'ln', 'wc', 'chmod', 'stty']
     if (!options.minimalPath) tools.push('uname')
+    if (options.nativeDecoder) tools.push('base64', 'cksum', 'cat')
     for (const tool of tools) {
         await fs.symlink(`/usr/bin/${tool}`, path.join(bin, tool))
     }
@@ -158,6 +160,29 @@ async function fixture(
 }
 
 describe('push over a real PTY', () => {
+    it.each([['/bin/sh'], ['/usr/bin/busybox', 'ash'], ['/bin/bash', '--norc']])(
+        'bootstraps binary data with native Base64 under %j',
+        async (...shell) => {
+            const f = await fixture({ shell, nativeDecoder: true, published: true })
+            // The initial exec delegates to the receiver before these extra binary bytes are read.
+            const receiver = Buffer.concat([
+                f.receiver,
+                ...Array.from({ length: 16 }, () =>
+                    Buffer.concat([
+                        Buffer.from('#'),
+                        Buffer.from(Array.from({ length: 256 }, (_, i) => i)),
+                        Buffer.from('\n'),
+                    ]),
+                ),
+            ])
+            f.options.loadReceiver = async () => ({ trz: receiver, tsz: f.sender })
+            await f.operation.run()
+            expect(f.statuses).toContain('使用原生 Base64 快速引导…')
+            expect(await fs.readFile(f.receiverPath)).toEqual(receiver)
+            expect(await fs.readFile(path.join(f.destination, f.filename))).toEqual(f.data)
+        },
+    )
+
     it.each([['/bin/sh'], ['/usr/bin/busybox', 'ash'], ['/bin/bash', '--norc']])(
         'preserves the shell prompt after bootstrap under %j without extra input',
         async (...shell) => {
@@ -399,38 +424,44 @@ describe('push over a real PTY', () => {
         await expect(fs.stat(path.join(path.dirname(f.receiverPath), 'tsz'))).rejects.toThrow()
     })
 
-    it('rejects corrupt bootstrap acknowledgements', async () => {
-        const f = await fixture()
-        const original = f.operation.feedFromSession.bind(f.operation)
-        f.operation.feedFromSession = (buffer) =>
-            original(Buffer.from(buffer.toString().replace(/ACK:/g, 'ACK:9')))
-        await expect(f.operation.run()).rejects.toThrow(/校验失败/)
-        await expect(fs.stat(path.join(f.destination, f.filename))).rejects.toThrow()
-    })
+    it.each([false, true])(
+        'rejects corrupt bootstrap acknowledgements with native=%s',
+        async (nativeDecoder) => {
+            const f = await fixture({ nativeDecoder })
+            const original = f.operation.feedFromSession.bind(f.operation)
+            f.operation.feedFromSession = (buffer) =>
+                original(Buffer.from(buffer.toString().replace(/ACK:/g, 'ACK:9')))
+            await expect(f.operation.run()).rejects.toThrow(/校验失败/)
+            await expect(fs.stat(path.join(f.destination, f.filename))).rejects.toThrow()
+        },
+    )
 
-    it('cancels mid-bootstrap, removes staging files and restores shell input', async () => {
-        const f = await fixture()
-        // Make the bootstrap span several acknowledged chunks.
-        f.options.loadReceiver = async () => ({
-            trz: Buffer.concat([f.receiver, Buffer.from('#' + 'x'.repeat(4096) + '\n')]),
-            tsz: f.sender,
-        })
-        const originalStatus = f.options.status
-        f.options.status = (status) => {
-            originalStatus(status)
-            if (status.startsWith('引导接收端')) f.operation.cancel()
-        }
-        await expect(f.operation.run()).rejects.toThrow('取消')
-        expect(
-            (await fs.readdir(path.dirname(f.receiverPath))).filter((name) =>
-                name.startsWith('.push-'),
-            ),
-        ).toEqual([])
-        await expect(fs.stat(f.receiverPath)).rejects.toThrow()
-        f.child.stdin.write("printf 'SHELL_RECOVERED\\n'\n")
-        await new Promise((resolve) => setTimeout(resolve, 100))
-        expect(f.transcript()).toContain('SHELL_RECOVERED\r\n')
-    })
+    it.each([false, true])(
+        'cancels mid-bootstrap and restores shell input with native=%s',
+        async (nativeDecoder) => {
+            const f = await fixture({ nativeDecoder })
+            // Make the bootstrap span several acknowledged chunks.
+            f.options.loadReceiver = async () => ({
+                trz: Buffer.concat([f.receiver, Buffer.from('#' + 'x'.repeat(4096) + '\n')]),
+                tsz: f.sender,
+            })
+            const originalStatus = f.options.status
+            f.options.status = (status) => {
+                originalStatus(status)
+                if (status.startsWith('引导接收端')) f.operation.cancel()
+            }
+            await expect(f.operation.run()).rejects.toThrow('取消')
+            expect(
+                (await fs.readdir(path.dirname(f.receiverPath))).filter((name) =>
+                    name.startsWith('.push-'),
+                ),
+            ).toEqual([])
+            await expect(fs.stat(f.receiverPath)).rejects.toThrow()
+            f.child.stdin.write("printf 'SHELL_RECOVERED\\n'\n")
+            await new Promise((resolve) => setTimeout(resolve, 100))
+            expect(f.transcript()).toContain('SHELL_RECOVERED\r\n')
+        },
+    )
 
     it.skipIf(!process.env.TRZ_BINARY)(
         'transfers against a native trz binary',
@@ -439,6 +470,7 @@ describe('push over a real PTY', () => {
                 published: true,
                 receiver: process.env.TRZ_BINARY,
                 data: randomBytes(256001),
+                nativeDecoder: true,
             })
             try {
                 await f.operation.run()

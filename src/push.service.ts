@@ -5,6 +5,7 @@ import { promises as fs, constants } from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import { randomBytes } from 'crypto'
+import { performance } from 'perf_hooks'
 import { Subscription } from 'rxjs'
 import {
     DEFAULT_RECEIVER_DIRECTORY,
@@ -76,11 +77,25 @@ export class PushService {
 
     private async execute(tab: PushTerminal, file?: SavedFile): Promise<void> {
         if (this.jobs.has(tab)) return
+        const startedAt = performance.now()
+        const operationName = file ? file.name || path.basename(file.localPath) : '引导传输端'
+        let duration: string | undefined
+        const elapsed = () =>
+            (duration ??= `${((performance.now() - startedAt) / 1000).toFixed(2)} 秒`)
         const job: { status: string; operation?: PushOperation; cancelled: boolean } = {
             status: file ? '检查本地文件…' : '准备引导传输端…',
             cancelled: false,
         }
         this.jobs.set(tab, job)
+        let firstStatus = true
+        const writeStatus = (message: string): void => {
+            void tab.write(`${firstStatus ? '\r\n' : ''}[Push Toolkit] ${message}\r\n`)
+            firstStatus = false
+        }
+        const updateStatus = (status: string): void => {
+            job.status = status
+            writeStatus(status)
+        }
         let temporary: string | undefined
         let middleware: PushMiddleware | undefined
         let inputLock: PushInputLock | undefined
@@ -131,19 +146,11 @@ export class PushService {
                         : {}),
                     settings,
                     loadReceiver: (platform, architecture, signal) =>
-                        this.receivers.load(
-                            platform,
-                            architecture,
-                            signal,
-                            (status) => {
-                                job.status = status
-                                void tab.write(`\r\n[Push Toolkit] ${status}\r\n`)
-                            },
-                            settings,
-                        ),
-                    status: (status) => {
-                        job.status = status
-                        void tab.write(`\r\n[Push Toolkit] ${status}\r\n`)
+                        this.receivers.load(platform, architecture, signal, updateStatus, settings),
+                    status: updateStatus,
+                    // STOPPED is parsed before forwarding the shell prompt, even in one packet.
+                    onStopped: () => {
+                        writeStatus(`${operationName}耗时：${elapsed()}。`)
                     },
                 },
                 tab.trzsz,
@@ -164,17 +171,20 @@ export class PushService {
             )
             await operation.run()
             if (file) {
-                this.notifications.info('Push Toolkit：上传完成', `${file.remoteDirectory}/${name}`)
+                this.notifications.info(
+                    'Push Toolkit：上传完成',
+                    `${file.remoteDirectory}/${name}\n耗时：${elapsed()}`,
+                )
             } else {
                 this.notifications.info(
                     'Push Toolkit：传输端已就绪',
-                    settings.receiverDirectory || DEFAULT_RECEIVER_DIRECTORY,
+                    `${settings.receiverDirectory || DEFAULT_RECEIVER_DIRECTORY}\n耗时：${elapsed()}`,
                 )
             }
         } catch (error) {
             this.notifications.error(
                 `Push Toolkit：${file ? '上传' : '引导'}失败`,
-                error instanceof Error ? error.message : String(error),
+                `${error instanceof Error ? error.message : String(error)}\n耗时：${elapsed()}`,
             )
         } finally {
             subscriptions.unsubscribe()

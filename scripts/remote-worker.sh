@@ -76,6 +76,8 @@ case "$action" in
         receiver=$bootstrap_receiver
         details=${action#BOOT:}
         sender_size=${details##*:}
+        details=${details%:*}
+        expected_crc=${details##*:}
         expected=${details%:*}
         mkdir -p "$receiver_dir" || fail RECEIVER_DIRECTORY
         stage_candidate="$receiver_dir/.push-$token"
@@ -83,15 +85,27 @@ case "$action" in
         boot_stage=$stage_candidate
         total=0 sum_a=1 sum_b=0 sequence=0
         : > "$boot_stage/trz" || fail RECEIVER_WRITE
-        report BOOT
+        detect_native_decoder
+        if [ -n "$native_flag" ]; then report BOOT:NATIVE; else report BOOT:SHELL; fi
         while IFS= read -r line; do
             [ "$line" != END ] || break
-            decode_chunk "$line" >> "$boot_stage/trz" || fail DECODE
+            if [ -n "$native_flag" ]; then
+                decode_native_chunk "$line" >> "$boot_stage/trz" || fail DECODE
+                checksum=$chunk_crc
+            else
+                decode_chunk "$line" >> "$boot_stage/trz" || fail DECODE
+                checksum=$sum_a:$sum_b
+            fi
             sequence=$((sequence + 1))
-            report "ACK:$sequence:$total:$sum_a:$sum_b"
+            report "ACK:$sequence:$total:$checksum"
         done
         [ "$line" = END ] || fail INPUT
-        [ "$total:$sum_a:$sum_b" = "$expected" ] || fail CHECKSUM
+        if [ -n "$native_flag" ]; then
+            check=$(cksum < "$boot_stage/trz") || fail CHECKSUM
+            [ "$check" = "$expected_crc ${expected%%:*}" ] || fail CHECKSUM
+        else
+            [ "$total:$sum_a:$sum_b" = "$expected" ] || fail CHECKSUM
+        fi
         actual=$(wc -c < "$boot_stage/trz") || fail SIZE
         [ "$actual" -eq "$total" ] || fail SIZE
         chmod u+x "$boot_stage/trz" || fail CHMOD

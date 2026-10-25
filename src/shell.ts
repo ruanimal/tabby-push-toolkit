@@ -31,3 +31,21 @@ export function adler32(data: Uint8Array): [number, number] {
     }
     return [a, b]
 }
+
+const cksumTable = Array.from({ length: 256 }, (_, value) => {
+    let crc = value << 24
+    for (let bit = 0; bit < 8; bit++) crc = (crc << 1) ^ (crc & 0x80000000 ? 0x04c11db7 : 0)
+    return crc >>> 0
+})
+
+/** POSIX cksum CRC, including the file length (different from zlib CRC-32). */
+export function posixCksum(data: Uint8Array): number {
+    let crc = 0
+    const update = (byte: number) => {
+        crc = (crc << 8) ^ cksumTable[((crc >>> 24) ^ byte) & 0xff]
+    }
+    for (const byte of data) update(byte)
+    for (let length = data.length; length > 0; length = Math.floor(length / 256))
+        update(length & 0xff)
+    return ~crc >>> 0
+}

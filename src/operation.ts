@@ -1,4 +1,4 @@
-import { adler32 } from './shell'
+import { adler32, posixCksum } from './shell'
 import { FrameParser } from './frames'
 import { DEFAULT_RECEIVER_DIRECTORY, PushSettings } from './models'
 import { WorkerOptions, workerCommand } from './worker'
@@ -23,6 +23,7 @@ export interface OperationOptions extends WorkerOptions {
         signal: AbortSignal,
     ) => Promise<ReceiverBinaries>
     status: (message: string) => void
+    onStopped?: () => void
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -164,7 +165,8 @@ export class PushOperation {
             this.receiverReturned = true
             this.receiverExited?.()
         }
-        if (message === 'STOPPED') {
+        if (message === 'STOPPED' && !this.stopSeen) {
+            this.options.onStopped?.()
             this.stopSeen = true
             this.stopped?.()
         }
@@ -296,29 +298,34 @@ export class PushOperation {
                 const staged = await this.stageSender(tools.tsz)
                 senderDirectory = staged.directory
                 const [a, b] = adler32(data)
-                this.send(`BOOT:${data.length}:${a}:${b}:${tools.tsz.length}\n`)
-                await this.wait('BOOT')
+                this.send(`BOOT:${data.length}:${a}:${b}:${posixCksum(data)}:${tools.tsz.length}\n`)
+                const native = (await this.wait('BOOT:')) === 'BOOT:NATIVE'
+                this.options.status(native ? '使用原生 Base64 快速引导…' : '使用纯 Shell 兼容引导…')
                 let sequence = 0
                 let progress = -1
                 let sumA = 1,
                     sumB = 0
                 for (let offset = 0; offset < data.length; offset += 768) {
                     const chunk = data.subarray(offset, offset + 768)
-                    for (const byte of chunk) {
-                        sumA = (sumA + byte) % 65521
-                        sumB = (sumB + sumA) % 65521
+                    if (!native) {
+                        for (const byte of chunk) {
+                            sumA = (sumA + byte) % 65521
+                            sumB = (sumB + sumA) % 65521
+                        }
                     }
                     this.send(`${chunk.toString('base64')}\n`)
                     const frame = await this.wait('ACK:')
                     const sent = offset + chunk.length
-                    if (frame !== `ACK:${++sequence}:${sent}:${sumA}:${sumB}`)
+                    const checksum = native ? `${posixCksum(chunk)}` : `${sumA}:${sumB}`
+                    if (frame !== `ACK:${++sequence}:${sent}:${checksum}`)
                         throw new Error('引导分块校验失败，已停止上传。')
                     const percent = Math.floor((sent * 100) / data.length / 10) * 10
                     if (percent !== progress) {
                         progress = percent
                         this.options.status(`引导接收端 ${percent}% (${sent}/${data.length} 字节)`)
                     }
-                    await delay(this.options.settings.chunkDelayMs)
+                    if (this.options.settings.chunkDelayMs > 0)
+                        await delay(this.options.settings.chunkDelayMs)
                 }
                 this.send('END\n')
                 await this.wait('SENDER_READY')

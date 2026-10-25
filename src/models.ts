@@ -26,7 +26,7 @@ export const defaults: PushSettings = {
     receiverDirectory: DEFAULT_RECEIVER_DIRECTORY,
     receiverDownloadSource: 'github',
     receiverCustomSources: [],
-    chunkDelayMs: 10,
+    chunkDelayMs: 0,
     timeoutMs: 60000,
 }
 

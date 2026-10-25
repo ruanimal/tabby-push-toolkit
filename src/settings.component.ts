@@ -155,6 +155,7 @@ import { ReceiverService } from './receiver.service'
                 [(ngModel)]="draft.chunkDelayMs"
                 aria-label="分块间隔"
         /></label>
+        <p class="text-muted">默认 0，收到分块确认后立即继续；链路有粘贴限速时可增加。</p>
         <label
             >无响应超时（毫秒）<input
                 class="form-control"
@@ -167,8 +168,9 @@ import { ReceiverService } from './receiver.service'
         <p class="text-muted">
             远端至少需要 POSIX sh、mkdir、rm、mv、ln、wc；首次引导额外需要 chmod、uname；MIPS
             引导还需要 od 检测 ELF 端序。赋予文件执行权限时需要 chmod。stty
-            可用时自动关闭回显并恢复。需要目录可写并允许执行上传程序。首次引导使用纯 Shell
-            解码和逐块确认，耗时取决于接收端体积与链路延迟。
+            可用时自动关闭回显并恢复。需要目录可写并允许执行上传程序。首次引导优先使用原生
+            base64、cksum、cat 加速，缺少时回退到纯 Shell；逐块等待确认，耗时受文件体积、远端 CPU
+            与链路延迟影响。
         </p>
         <p *ngIf="error" class="text-danger" role="alert">{{ error }}</p>
         <p *ngIf="saved" class="text-success" role="status">设置已保存</p>

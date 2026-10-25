@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'child_process'
 import { readFileSync } from 'fs'
-import { quote, remotePath, receiverLocation, adler32 } from './shell'
+import { quote, remotePath, receiverLocation, adler32, posixCksum } from './shell'
 import { defaults, validateName, validateSettings } from './models'
 
 describe('shell paths and receiver selection', () => {
@@ -49,6 +49,15 @@ describe('shell paths and receiver selection', () => {
 const decoder = readFileSync(new URL('../scripts/base64-decode.sh', import.meta.url), 'utf8')
 const bootstrap = readFileSync(new URL('../scripts/bootstrap-decoder.sh', import.meta.url), 'utf8')
 const shells = [['sh'], ['/usr/bin/busybox', 'ash']]
+
+describe('POSIX cksum interoperability', () => {
+    it.each([0, 1, 2, 255, 256, 768, 551184])('matches native cksum for %i bytes', (length) => {
+        const input = Buffer.from(Array.from({ length }, (_, i) => i & 0xff))
+        const result = spawnSync('cksum', [], { input })
+        expect(result.status).toBe(0)
+        expect(result.stdout.toString().trim()).toBe(`${posixCksum(input)} ${length}`)
+    })
+})
 
 describe.each(shells)('decoder under %s', (...command) => {
     function run(script: string, input: string) {
@@ -102,4 +111,40 @@ describe.each(shells)('decoder under %s', (...command) => {
             ).not.toBe(0)
         }
     })
+
+    it.each(['gnu', 'bsd', 'unusable', 'missing'])(
+        'detects %s native tools and preserves binary chunks and checksums',
+        (mode) => {
+            const input = Buffer.from(Array.from({ length: 768 }, (_, i) => i & 0xff))
+            const override = {
+                gnu: 'base64() { /usr/bin/base64 "$@"; }',
+                bsd: 'base64() { [ "$1" = -D ] || return 1; /usr/bin/base64 -d; }',
+                unusable: 'base64() { cat >/dev/null; printf broken; }',
+                missing: 'cksum() { return 127; }',
+            }[mode]
+            const native = mode === 'gnu' || mode === 'bsd'
+            const [a, b] = adler32(input)
+            const result = run(
+                `${bootstrap}
+boot_stage=$(mktemp -d)
+trap 'rm -rf "$boot_stage"' 0
+${override}
+detect_native_decoder
+sum_a=1 sum_b=0 total=0
+if [ -n "$native_flag" ]; then
+    decode_native_chunk ${quote(input.toString('base64'))} || exit 1
+    printf '%s' "native:$total:$chunk_crc" >&2
+else
+    decode_chunk ${quote(input.toString('base64'))} || exit 1
+    printf '%s' "shell:$total:$sum_a:$sum_b" >&2
+fi`,
+                '',
+            )
+            expect(result.status).toBe(0)
+            expect(result.stdout).toEqual(input)
+            expect(result.stderr.toString()).toBe(
+                native ? `native:768:${posixCksum(input)}` : `shell:768:${a}:${b}`,
+            )
+        },
+    )
 })

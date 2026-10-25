@@ -1,5 +1,33 @@
-# Sourced by the temporary remote worker. POSIX shell builtins only.
+# Sourced by the temporary remote worker. Fallback uses POSIX shell builtins only.
 # Each independently padded Base64 line is acknowledged after a successful write.
+detect_native_decoder() {
+    native_flag=
+    for tool in base64 cksum cat; do
+        command -v "$tool" >/dev/null 2>&1 || return 0
+    done
+    # GNU/BusyBox use -d; BSD/macOS also support -D. Verify decoding and CRC together.
+    for flag in -d -D; do
+        if printf 'YQ==' | base64 "$flag" > "$boot_stage/chunk" 2>/dev/null; then
+            check=$(cksum < "$boot_stage/chunk") || continue
+            [ "$check" = '1220704766 1' ] || continue
+            native_flag=$flag
+            break
+        fi
+    done
+}
+
+decode_native_chunk() {
+    [ "${#1}" -le 1024 ] || return 1
+    printf '%s' "$1" | base64 "$native_flag" > "$boot_stage/chunk" || return 1
+    check=$(cksum < "$boot_stage/chunk") || return 1
+    set -- $check
+    [ "$#" -eq 2 ] || return 1
+    chunk_crc=$1
+    bytes=$2
+    cat "$boot_stage/chunk" || return 1
+    total=$((total + bytes))
+}
+
 decode_chunk() {
     encoded=$1
     alphabet=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/
