@@ -15,7 +15,7 @@ export interface TransferClient {
 }
 
 export interface OperationOptions extends WorkerOptions {
-    localPath: string
+    localPath?: string
     settings: PushSettings
     loadReceiver: (
         platform: string,
@@ -122,7 +122,7 @@ export class PushOperation {
         }
     }
 
-    cancel(reason = '已取消上传。'): void {
+    cancel(reason = '已取消当前操作。'): void {
         this.fail(new Error(reason))
     }
 
@@ -196,19 +196,57 @@ export class PushOperation {
         this.send('COMMIT\n')
     }
 
+    private async stageSender(data: Buffer): Promise<{ directory: string; path: string }> {
+        const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tabby-push-tsz-'))
+        const sender = path.join(directory, 'tsz')
+        await fs.writeFile(sender, data)
+        return { directory, path: sender }
+    }
+
     async run(): Promise<void> {
         if (this.client.isTransferringFiles()) throw new Error('当前终端已有 trzsz 传输正在进行。')
         let senderDirectory: string | undefined
         try {
-            this.options.status('检测远端接收端…')
+            this.options.status(this.options.bootstrapOnly ? '检测远端传输端…' : '检测远端接收端…')
             // Pace shell program lines as well as data; never paste a large command at once.
             for (const line of workerCommand(this.options).trimEnd().split('\n')) {
                 this.send(`${line}\n`)
                 await delay(Math.max(2, this.options.settings.chunkDelayMs))
             }
             const probe = (await this.wait('PROBE:')).split(':')
+            if (this.options.bootstrapOnly && probe[3] === '1') {
+                if (probe[4] === '1') {
+                    this.send('USE\n')
+                    await this.wait('BOOTSTRAP_DONE')
+                    this.options.status('trz 和 tsz 已就绪。')
+                    return
+                }
+
+                const tools = await this.options.loadReceiver(
+                    probe[1],
+                    probe[2],
+                    this.abortController.signal,
+                )
+                if (!tools.tsz.length) throw new Error('tsz 文件为空。')
+                const staged = await this.stageSender(tools.tsz)
+                senderDirectory = staged.directory
+                this.options.status(
+                    `通过 trzsz 安装 tsz 到 ${this.options.receiverDirectory || DEFAULT_RECEIVER_DIRECTORY}…`,
+                )
+                this.send(`USE:${tools.tsz.length}\n`)
+                await this.transfer(staged.path, 'SENDER_RECEIVED')
+                await this.wait('SENDER_DONE')
+                await this.wait('BOOTSTRAP_DONE')
+                this.options.status('trz 和 tsz 已就绪。')
+                return
+            }
+
             if (probe[3] === '1') {
-                this.options.status('使用远端已安装的 trz…')
+                this.options.status(
+                    this.options.bootstrapOnly
+                        ? '未找到远端 trz，开始引导 trz 和 tsz…'
+                        : '使用远端已安装的 trz…',
+                )
                 this.send('USE\n')
             } else {
                 const tools = await this.options.loadReceiver(
@@ -218,9 +256,8 @@ export class PushOperation {
                 )
                 const data = tools.trz
                 if (!data.length || !tools.tsz.length) throw new Error('trz 或 tsz 文件为空。')
-                senderDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'tabby-push-tsz-'))
-                const sender = path.join(senderDirectory, 'tsz')
-                await fs.writeFile(sender, tools.tsz)
+                const staged = await this.stageSender(tools.tsz)
+                senderDirectory = staged.directory
                 const [a, b] = adler32(data)
                 this.send(`BOOT:${data.length}:${a}:${b}:${tools.tsz.length}\n`)
                 await this.wait('BOOT')
@@ -251,11 +288,17 @@ export class PushOperation {
                 this.options.status(
                     `通过 trzsz 安装 tsz 到 ${this.options.receiverDirectory || DEFAULT_RECEIVER_DIRECTORY}…`,
                 )
-                await this.transfer(sender, 'SENDER_RECEIVED')
+                await this.transfer(staged.path, 'SENDER_RECEIVED')
                 await this.wait('SENDER_DONE')
+            }
+            if (this.options.bootstrapOnly) {
+                await this.wait('BOOTSTRAP_DONE')
+                this.options.status('trz 和 tsz 已就绪。')
+                return
             }
             await this.wait('READY')
             this.options.status('通过 trzsz 上传文件…')
+            if (!this.options.localPath) throw new Error('缺少待上传的本地文件。')
             await this.transfer(this.options.localPath, 'RECEIVED')
             await this.wait('DONE')
             this.options.status('上传完成。')

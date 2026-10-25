@@ -1,29 +1,39 @@
 import decoder from '../scripts/bootstrap-decoder.sh?raw'
 import worker from '../scripts/remote-worker.sh?raw'
 import { quote, remotePath, receiverLocation } from './shell'
+import { DEFAULT_RECEIVER_DIRECTORY } from './models'
 
 export interface WorkerOptions {
     token: string
     receiverDirectory: string
-    destination: string
-    filename: string
-    fileSize: number
-    executable: boolean
-    overwrite: boolean
+    destination?: string
+    filename?: string
+    fileSize?: number
+    executable?: boolean
+    overwrite?: boolean
+    bootstrapOnly?: boolean
 }
 
 export function workerCommand(options: WorkerOptions): string {
     if (!/^[a-f0-9]{32}$/.test(options.token)) throw new Error('Invalid transfer token')
-    if (!Number.isSafeInteger(options.fileSize) || options.fileSize < 0)
+    if (
+        !options.bootstrapOnly &&
+        (!Number.isSafeInteger(options.fileSize) || (options.fileSize ?? -1) < 0)
+    )
         throw new Error('Invalid file size')
     const receiver = receiverLocation(options.receiverDirectory)
+    const receiverDirectory =
+        (options.receiverDirectory || DEFAULT_RECEIVER_DIRECTORY).replace(/\/+$/, '') || '/'
+    const senderPath = `${receiverDirectory === '/' ? '' : receiverDirectory}/tsz`
     const script = [
         `token=${quote(options.token)}`,
         `receiver_dir=${receiver.directory}`,
         `bootstrap_receiver=${receiver.command}`,
-        `destination=${remotePath(options.destination)}`,
-        `filename=${quote(options.filename)}`,
-        `file_size=${options.fileSize}`,
+        `bootstrap_sender=${remotePath(senderPath)}`,
+        `bootstrap_only=${options.bootstrapOnly ? 1 : 0}`,
+        `destination=${options.bootstrapOnly ? "''" : remotePath(options.destination ?? '')}`,
+        `filename=${quote(options.filename ?? '')}`,
+        `file_size=${options.fileSize ?? 0}`,
         `executable=${options.executable ? 1 : 0}`,
         `overwrite=${options.overwrite ? 1 : 0}`,
         decoder,

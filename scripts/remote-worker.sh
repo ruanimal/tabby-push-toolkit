@@ -28,16 +28,26 @@ find_receiver() {
     [ -f "$candidate" ] && [ -x "$candidate" ] || return 1
     receiver=$candidate
 }
+find_sender() {
+    candidate=$(command -v "$1" 2>/dev/null) || return 1
+    [ -f "$candidate" ] && [ -x "$candidate" ] || return 1
+    sender=$candidate
+}
 platform=unknown architecture=unknown
 available=0
 if find_receiver "$bootstrap_receiver" || find_receiver trz; then
     available=1
-else
+fi
+sender_available=0
+if find_sender "$bootstrap_sender" || find_sender tsz; then
+    sender_available=1
+fi
+if [ "$available" != 1 ] || { [ "$bootstrap_only" = 1 ] && [ "$sender_available" != 1 ]; }; then
     command -v uname >/dev/null 2>&1 || fail MISSING_uname
     platform=$(uname -s) || fail UNAME
     architecture=$(uname -m) || fail UNAME
 fi
-report "PROBE:$platform:$architecture:$available"
+report "PROBE:$platform:$architecture:$available:$sender_available"
 IFS= read -r action || fail INPUT
 case "$action" in
     BOOT:*)
@@ -87,8 +97,51 @@ case "$action" in
         mv -f "$boot_stage/trz" "$bootstrap_receiver" || fail RECEIVER_COMMIT
         receiver=$bootstrap_receiver
         report SENDER_DONE
+        if [ "$bootstrap_only" = 1 ]; then
+            report BOOTSTRAP_DONE
+            exit 0
+        fi
         ;;
-    USE) [ "$available" = 1 ] || fail RECEIVER_MISSING ;;
+    USE|USE:*)
+        [ "$available" = 1 ] || fail RECEIVER_MISSING
+        if [ "$bootstrap_only" = 1 ]; then
+            if [ "$sender_available" = 1 ]; then
+                report BOOTSTRAP_DONE
+                exit 0
+            fi
+            case "$action" in
+                USE:*)
+                    sender_size=${action#USE:}
+                    case "$sender_size" in ''|*[!0-9]*) fail INPUT ;; esac
+                    ;;
+                *) fail INPUT ;;
+            esac
+            command -v chmod >/dev/null 2>&1 || fail MISSING_chmod
+            mkdir -p "$receiver_dir" || fail RECEIVER_DIRECTORY
+            stage_candidate="$receiver_dir/.push-$token"
+            mkdir "$stage_candidate" || fail SENDER_STAGE
+            file_stage=$stage_candidate
+            "$receiver" -q -y -B 64K -- "$file_stage"
+            rc=$?
+            [ "$rc" = 0 ] || fail TRANSFER
+            report SENDER_RECEIVED
+            IFS= read -r action || fail INPUT
+            [ "$action" = COMMIT ] || fail CANCELLED
+            received="$file_stage/tsz"
+            [ -f "$received" ] && [ ! -L "$received" ] || fail SENDER_MISSING
+            actual=$(wc -c < "$received") || fail SIZE
+            [ "$actual" -eq "$sender_size" ] || fail SIZE
+            chmod u+x "$received" || fail CHMOD
+            "$received" --version >/dev/null 2>&1 || fail SENDER_EXEC
+            [ ! -d "$bootstrap_sender" ] || fail SENDER_COMMIT
+            mv -f "$received" "$bootstrap_sender" || fail SENDER_COMMIT
+            rm -rf "$file_stage"
+            file_stage=
+            report SENDER_DONE
+            report BOOTSTRAP_DONE
+            exit 0
+        fi
+        ;;
     *) fail CANCELLED ;;
 esac
 mkdir -p "$destination" || fail DESTINATION

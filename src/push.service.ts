@@ -6,7 +6,13 @@ import * as path from 'path'
 import * as os from 'os'
 import { randomBytes } from 'crypto'
 import { Subscription } from 'rxjs'
-import { PushSettings, SavedFile, validateName, validateSettings } from './models'
+import {
+    DEFAULT_RECEIVER_DIRECTORY,
+    PushSettings,
+    SavedFile,
+    validateName,
+    validateSettings,
+} from './models'
 import { remotePath, receiverLocation } from './shell'
 import { PushOperation, TransferClient } from './operation'
 import { PushMiddleware, PushInputLock } from './middleware'
@@ -16,12 +22,8 @@ export type PushTerminal = BaseTerminalTabComponent<BaseTerminalProfile> & {
     trzsz?: TransferClient
 }
 
-export function isSSHTerminal(tab: unknown): tab is PushTerminal {
-    return (
-        tab instanceof BaseTerminalTabComponent &&
-        tab.profile?.type === 'ssh' &&
-        !!tab.session?.open
-    )
+export function isConnectedTerminal(tab: unknown): tab is PushTerminal {
+    return tab instanceof BaseTerminalTabComponent && !!tab.session?.open
 }
 
 function localPath(value: string): string {
@@ -65,9 +67,17 @@ export class PushService {
     }
 
     async push(tab: PushTerminal, file: SavedFile): Promise<void> {
+        return this.execute(tab, file)
+    }
+
+    async bootstrap(tab: PushTerminal): Promise<void> {
+        return this.execute(tab)
+    }
+
+    private async execute(tab: PushTerminal, file?: SavedFile): Promise<void> {
         if (this.jobs.has(tab)) return
         const job: { status: string; operation?: PushOperation; cancelled: boolean } = {
-            status: '检查本地文件…',
+            status: file ? '检查本地文件…' : '准备引导传输端…',
             cancelled: false,
         }
         this.jobs.set(tab, job)
@@ -77,39 +87,48 @@ export class PushService {
         const subscriptions = new Subscription()
         const session = tab.session
         try {
-            if (!isSSHTerminal(tab) || !session) throw new Error('请选择已连接的 SSH 终端。')
+            if (!isConnectedTerminal(tab) || !session)
+                throw new Error('请选择已连接的终端，并确认远端已进入 Shell。')
             if (tab.alternateScreenActive)
                 throw new Error('请先退出全屏程序，回到远端 Shell 提示符。')
             if (!tab.trzsz)
-                throw new Error(
-                    'trzsz 尚未就绪。请重新打开 SSH 标签页，并检查 tabby-trzsz 是否已被禁用。',
-                )
+                throw new Error('trzsz 尚未就绪。请重新打开终端，并检查 tabby-trzsz 是否已被禁用。')
             if (tab.trzsz.isTransferringFiles()) throw new Error('当前终端已有传输正在进行。')
             const settings = JSON.parse(JSON.stringify(this.settings)) as PushSettings
             validateSettings(settings)
-            const source = localPath(file.localPath)
-            const name = validateName(file.remoteName || path.basename(source))
             receiverLocation(settings.receiverDirectory)
-            remotePath(file.remoteDirectory)
-            const stat = await fs.stat(source)
-            if (!stat.isFile()) throw new Error('常用文件条目必须指向普通文件。')
-            temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'tabby-push-'))
-            const snapshot = path.join(temporary, name)
-            await fs.copyFile(source, snapshot, constants.COPYFILE_EXCL)
-            const fileSize = (await fs.stat(snapshot)).size
+            let snapshot: string | undefined
+            let name: string | undefined
+            let fileSize: number | undefined
+            if (file) {
+                const source = localPath(file.localPath)
+                name = validateName(file.remoteName || path.basename(source))
+                remotePath(file.remoteDirectory)
+                const stat = await fs.stat(source)
+                if (!stat.isFile()) throw new Error('常用文件条目必须指向普通文件。')
+                temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'tabby-push-'))
+                snapshot = path.join(temporary, name)
+                await fs.copyFile(source, snapshot, constants.COPYFILE_EXCL)
+                fileSize = (await fs.stat(snapshot)).size
+            }
             if (!session.open || tab.session !== session)
-                throw new Error('SSH 会话已改变，请重试。')
-            if (job.cancelled) throw new Error('已取消上传。')
+                throw new Error('终端会话已改变，请重试。')
+            if (job.cancelled) throw new Error('已取消当前操作。')
             const operation = new PushOperation(
                 {
                     token: randomBytes(16).toString('hex'),
                     receiverDirectory: settings.receiverDirectory,
-                    destination: file.remoteDirectory,
-                    filename: name,
-                    fileSize,
-                    executable: !!file.executable,
-                    overwrite: !!file.overwrite,
-                    localPath: snapshot,
+                    bootstrapOnly: !file,
+                    ...(file
+                        ? {
+                              destination: file.remoteDirectory,
+                              filename: name,
+                              fileSize,
+                              executable: !!file.executable,
+                              overwrite: !!file.overwrite,
+                              localPath: snapshot,
+                          }
+                        : {}),
                     settings,
                     loadReceiver: (platform, architecture, signal) =>
                         this.receivers.load(
@@ -137,17 +156,24 @@ export class PushService {
             inputLock = new PushInputLock(() => operation.cancel())
             session.middleware.unshift(middleware)
             session.middleware.push(inputLock)
-            subscriptions.add(session.closed$.subscribe(() => operation.cancel('SSH 连接已断开。')))
+            subscriptions.add(session.closed$.subscribe(() => operation.cancel('终端连接已断开。')))
             subscriptions.add(
                 tab.sessionChanged$.subscribe((current) => {
-                    if (current !== session) operation.cancel('SSH 会话已改变。')
+                    if (current !== session) operation.cancel('终端会话已改变。')
                 }),
             )
             await operation.run()
-            this.notifications.info('Push Toolkit：上传完成', `${file.remoteDirectory}/${name}`)
+            if (file) {
+                this.notifications.info('Push Toolkit：上传完成', `${file.remoteDirectory}/${name}`)
+            } else {
+                this.notifications.info(
+                    'Push Toolkit：传输端已就绪',
+                    settings.receiverDirectory || DEFAULT_RECEIVER_DIRECTORY,
+                )
+            }
         } catch (error) {
             this.notifications.error(
-                'Push Toolkit：上传失败',
+                `Push Toolkit：${file ? '上传' : '引导'}失败`,
                 error instanceof Error ? error.message : String(error),
             )
         } finally {
