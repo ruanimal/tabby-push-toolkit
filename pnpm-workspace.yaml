@@ -1,0 +1,5 @@
+packages:
+    - .
+storeDir: .pnpm-store
+autoInstallPeers: false
+verifyDepsBeforeRun: false

@@ -1,0 +1,106 @@
+# The plugin prepends configuration and decode_chunk(), then invokes sh -c.
+LC_ALL=C
+export LC_ALL
+umask 077
+report() { printf '\036PT%s:%s\037\n' "$token" "$1"; }
+fail() { report "ERROR:$1"; exit 1; }
+boot_stage= file_stage= tty_state=
+cleanup() {
+    [ -z "$boot_stage" ] || rm -rf "$boot_stage"
+    [ -z "$file_stage" ] || rm -rf "$file_stage"
+    [ -z "$tty_state" ] || stty "$tty_state"
+    return 0
+}
+trap 'cleanup; report STOPPED' 0
+trap 'exit 130' 1 2 15
+for tool in mkdir rm mv ln wc; do
+    command -v "$tool" >/dev/null 2>&1 || fail "MISSING_$tool"
+done
+if [ "$executable" = 1 ]; then
+    command -v chmod >/dev/null 2>&1 || fail MISSING_chmod
+fi
+if command -v stty >/dev/null 2>&1; then
+    tty_state=$(stty -g 2>/dev/null) || tty_state=
+    [ -z "$tty_state" ] || stty -echo
+fi
+find_receiver() {
+    candidate=$(command -v "$1" 2>/dev/null) || return 1
+    [ -f "$candidate" ] && [ -x "$candidate" ] || return 1
+    receiver=$candidate
+}
+platform=unknown architecture=unknown
+available=0
+if find_receiver "$receiver" || find_receiver trz || find_receiver "$bootstrap_receiver"; then
+    available=1
+else
+    command -v uname >/dev/null 2>&1 || fail MISSING_uname
+    platform=$(uname -s) || fail UNAME
+    architecture=$(uname -m) || fail UNAME
+fi
+report "PROBE:$platform:$architecture:$available"
+IFS= read -r action || fail INPUT
+case "$action" in
+    BOOT:*)
+        command -v chmod >/dev/null 2>&1 || fail MISSING_chmod
+        receiver=$bootstrap_receiver
+        expected=${action#BOOT:}
+        receiver_dir=${receiver%/*}
+        mkdir -p "$receiver_dir" || fail RECEIVER_DIRECTORY
+        stage_candidate="$receiver_dir/.push-$token"
+        mkdir "$stage_candidate" || fail RECEIVER_STAGE
+        boot_stage=$stage_candidate
+        total=0 sum_a=1 sum_b=0 sequence=0
+        : > "$boot_stage/trz" || fail RECEIVER_WRITE
+        report BOOT
+        while IFS= read -r line; do
+            [ "$line" != END ] || break
+            decode_chunk "$line" >> "$boot_stage/trz" || fail DECODE
+            sequence=$((sequence + 1))
+            report "ACK:$sequence:$total:$sum_a:$sum_b"
+        done
+        [ "$line" = END ] || fail INPUT
+        [ "$total:$sum_a:$sum_b" = "$expected" ] || fail CHECKSUM
+        actual=$(wc -c < "$boot_stage/trz") || fail SIZE
+        [ "$actual" -eq "$total" ] || fail SIZE
+        chmod u+x "$boot_stage/trz" || fail CHMOD
+        "$boot_stage/trz" --version >/dev/null 2>&1 || fail RECEIVER_EXEC
+        [ ! -d "$receiver" ] || fail RECEIVER_DIRECTORY
+        mv -f "$boot_stage/trz" "$receiver" || fail RECEIVER_COMMIT
+        ;;
+    USE) [ "$available" = 1 ] || fail RECEIVER_MISSING ;;
+    *) fail CANCELLED ;;
+esac
+mkdir -p "$destination" || fail DESTINATION
+target="$destination/$filename"
+[ ! -d "$target" ] && [ ! -L "$target" ] || fail TARGET_TYPE
+if [ "$overwrite" != 1 ] && [ -e "$target" ]; then fail EXISTS; fi
+stage_candidate="$destination/.push-$token"
+mkdir "$stage_candidate" || fail FILE_STAGE
+file_stage=$stage_candidate
+report READY
+IFS= read -r action || fail INPUT
+[ "$action" = GO ] || fail CANCELLED
+"$receiver" -q -y -B 64K -- "$file_stage"
+rc=$?
+[ "$rc" = 0 ] || fail TRANSFER
+report RECEIVED
+# Some trz implementations exit zero on cancellation or protocol error.
+# Only the client's successful protocol completion authorizes final replacement.
+IFS= read -r action || fail INPUT
+[ "$action" = COMMIT ] || fail CANCELLED
+received="$file_stage/$filename"
+[ -f "$received" ] && [ ! -L "$received" ] || fail FILE_MISSING
+actual=$(wc -c < "$received") || fail SIZE
+[ "$actual" -eq "$file_size" ] || fail SIZE
+[ "$executable" != 1 ] || chmod u+x "$received" || fail CHMOD
+[ ! -d "$target" ] && [ ! -L "$target" ] || fail TARGET_TYPE
+if [ "$overwrite" != 1 ] && [ -e "$target" ]; then fail EXISTS; fi
+if [ "$overwrite" = 1 ]; then
+    mv -f "$received" "$target" || fail FILE_COMMIT
+else
+    # A same-filesystem hard link refuses an existing file atomically.
+    ln "$received" "$target" || fail FILE_COMMIT
+fi
+cleanup
+boot_stage= file_stage= tty_state=
+report DONE
