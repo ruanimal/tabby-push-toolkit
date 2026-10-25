@@ -2,12 +2,14 @@
 
 [简体中文](README.md) | English
 
-Push frequently used local files to minimal remote environments through the currently connected Tabby terminal session. Supports both Tabby SSH profiles and SSH connections started by running `ssh` in a regular terminal. Transfers reuse the current terminal connection, including SSH jump hosts, without opening a separate SCP/SFTP connection. The plugin prefers an existing remote `trz`; only when no usable receiver is available does it bootstrap one using a pure POSIX shell Base64 decoder.
+Push frequently used local files to the target environment through the currently connected Tabby terminal session. No specific connection type is required: local and remote sessions can both be used when they meet the environment requirements below. Transfers reuse the current terminal without opening a separate file-transfer connection. The plugin prefers an existing `trz` in the target environment; only when no usable receiver is available does it bootstrap one using a pure POSIX shell Base64 decoder.
+
+Throughout this document, “remote” refers to the target environment in the current terminal session, which may also be the local machine.
 
 ## Features
 
 - Save multiple frequently used files in settings, including a name, local path, remote directory, target filename, executable permission, and overwrite policy.
-- Right-click a connected terminal → **Push Toolkit** → choose **引导传输端** (Bootstrap transfer tools) to install `trz` and `tsz`, or choose a saved file to upload it directly. In a regular terminal, first run `ssh` and reach the remote shell prompt.
+- Right-click a connected terminal → **Push Toolkit** → choose **引导传输端** (Bootstrap transfer tools) to install `trz` and `tsz`, or choose a saved file to upload it directly. Start operations at an idle shell prompt in the target environment.
 - Look for `trz` in the configured remote tools directory first, then in the remote `PATH`. An existing receiver needs no local file, platform, or architecture configuration and does not have to implement `--version`; compatibility is confirmed by the actual transfer handshake.
 - When bootstrapping is needed, download the all-platform archive from the pinned [trzsz-rs v1.3.0 release](https://github.com/ruanimal/trzsz-rs/releases/tag/v1.3.0) and select the inner release archive for the remote platform. Linux uses static musl builds, preferring the release's UPX variants to reduce the initial transfer size.
 - Checksum manifests are embedded in the plugin, and archives are cached in the current Tabby configuration directory. Supports GitHub, Gitee, and custom download sources, pre-downloading, opening the cache directory, and manually supplied archives. After verifying the embedded SHA-256 checksums, the plugin extracts `trz` and `tsz` locally without requiring manual platform or architecture selection.
@@ -44,8 +46,8 @@ The UI labels below retain their Chinese text so you can match them in the setti
 
 1. Open **Settings → Push Toolkit**, add a saved file, and enter its absolute local path and a remote directory such as `~/tools`. Remote directories must start with `/` or `~/`; other shell variables are not expanded. Leave the target filename blank to use the local filename.
 2. **远端工具目录** (Remote tools directory) defaults to `~/.local/bin`; leaving it blank uses the same default. You can change it to a directory such as `/usr/local/bin` or `~/tools/bin`, but it must start with `/` or `~/`. This setting controls where the plugin looks for and installs `trz` and `tsz`.
-3. Select a receiver download source: GitHub is the default, Gitee is the fallback, and custom sources are supported. Click **预下载接收端** (Pre-download receiver) to populate the cache in advance. This requires no SSH connection and does not save other unfinished settings.
-4. Save the settings. Return to a connected SSH terminal, or a regular terminal where you have run `ssh` and reached the remote shell. At an idle shell prompt, right-click and select **Push Toolkit → 引导传输端** (Bootstrap transfer tools), or select a saved file directly. If the remote system lacks `trz` or `tsz`, the plugin automatically identifies its platform and downloads, caches, and bootstraps `trzsz-rs v1.3.0`.
+3. Select a receiver download source: GitHub is the default, Gitee is the fallback, and custom sources are supported. Click **预下载接收端** (Pre-download receiver) to populate the cache in advance. This requires no open terminal session and does not save other unfinished settings.
+4. Save the settings. Return to a connected terminal session at an idle shell prompt in the target environment, then right-click and select **Push Toolkit → 引导传输端** (Bootstrap transfer tools), or select a saved file directly. If the remote system lacks `trz` or `tsz`, the plugin automatically identifies its platform and downloads, caches, and bootstraps `trzsz-rs v1.3.0`.
 
 Each operation checks for `trz` in the configured directory first, then in `PATH`. If neither is usable, it bootstraps `trz` and `tsz` into the configured directory, creating it if needed. For example, setting the tools directory to `~/tools/bin` checks `~/tools/bin/trz` first and installs both programs into `~/tools/bin` when bootstrapping is needed. Detection runs every time and does not rely on a session cache.
 
@@ -63,7 +65,7 @@ The cache lives at `push-toolkit/receivers/v1.3.0/` under the directory containi
 └── …other platform archives
 ```
 
-Click **打开缓存目录** (Open cache directory) in settings to create and open this directory. **预下载接收端** (Pre-download receiver) downloads and caches the all-platform archive (about 36 MB), then verifies its 28 platform archives individually and writes them to the same cache directory. No SSH session is needed. The operation can be cancelled and reuses an existing complete, valid cache. You can also download the archive from one of the URLs below and place it in the cache directory as `trzsz-v1.3.0-all-platform.tar.gz`; pre-downloading or the first bootstrap will detect and extract it automatically. Individual platform archives from the release can also be placed there directly; they are verified and used during bootstrapping.
+Click **打开缓存目录** (Open cache directory) in settings to create and open this directory. **预下载接收端** (Pre-download receiver) downloads and caches the all-platform archive (about 36 MB), then verifies its 28 platform archives individually and writes them to the same cache directory. No open terminal session is needed. The operation can be cancelled and reuses an existing complete, valid cache. You can also download the archive from one of the URLs below and place it in the cache directory as `trzsz-v1.3.0-all-platform.tar.gz`; pre-downloading or the first bootstrap will detect and extract it automatically. Individual platform archives from the release can also be placed there directly; they are verified and used during bootstrapping.
 
 Built-in download sources:
 
@@ -82,7 +84,7 @@ The remote system needs POSIX `sh`, `mkdir`, `rm`, `mv`, `ln`, and `wc`. Initial
 
 - The remote directory must be writable and allow execution of uploaded programs. Bootstrapping cannot work on `noexec` mounts or when execution policies block it.
 - Start operations at an idle shell prompt that supports POSIX command quoting. Full-screen applications are rejected, but not every foreground process or unsubmitted command can be detected reliably.
-- Transfers use the current session and can therefore reuse existing SSH jump-host connections. Character filtering, paste limits, and tmux/relay behavior on real bastion hosts still need testing on the actual setup; arbitrary intermediary chains are not guaranteed to work.
+- Transfers use the current terminal session without requiring a specific connection type. Character filtering, paste limits, and tmux/relay behavior along the actual connection path still need testing on the target setup; arbitrary intermediary chains are not guaranteed to work.
 - Initial bootstrapping waits for an acknowledgment after each chunk. Larger receivers and higher-latency connections take longer. Subsequent file transfers use trzsz. The bootstrap Adler-32 checksum detects accidental corruption; it is not a substitute for verifying source authenticity.
 - Only regular files are supported; directory uploads and resumable transfers are not provided. A local temporary copy is created before upload so changes to the source file do not affect the transfer. If no receiver is cached and all download sources are unavailable, manually supply the all-platform archive or install a compatible `trz` on the remote system first.
 - Overwriting is disabled by default. Committing uses a hard link to reject existing regular files. Targets that are directories or symbolic links are always rejected. When overwriting is allowed, the transfer completes in a temporary area in the same directory before the file is renamed into place.
@@ -113,6 +115,6 @@ To test caching, extraction, and actual uploads with the pinned release archive 
 TRZ_ALL_ARCHIVE=/path/to/trzsz-v1.3.0-all-platform.tar.gz pnpm test
 ```
 
-The project's existing verification covers local PTYs, BusyBox ash, all-platform cache reuse, embedded checksums, fallback sources, pre-downloading, manually supplied caches, download cancellation, and native Rust `trz` bootstrapping and transfers. The full Tabby GUI, real Alpine containers, SSH bastion hosts, and tmux connections have not yet been verified.
+The project's existing verification covers local PTYs, BusyBox ash, all-platform cache reuse, embedded checksums, fallback sources, pre-downloading, manually supplied caches, download cancellation, and native Rust `trz` bootstrapping and transfers. The full Tabby GUI, real Alpine containers, bastion hosts, and tmux connections have not yet been verified.
 
 Original requirements and discussion notes are available in [docs/design-notes.md](docs/design-notes.md) (Chinese).

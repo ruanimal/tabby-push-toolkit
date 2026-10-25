@@ -14,7 +14,7 @@ import { ReceiverService } from './receiver.service'
     template: `
         <h3>Push Toolkit</h3>
         <p class="text-muted">
-            通过当前 SSH 终端推送常用文件。请在远端 Shell
+            通过当前终端会话推送常用文件。请在目标环境的 Shell
             空闲提示符下操作；上传期间输入会被接管，Ctrl+C 可取消。
         </p>
         <p class="text-muted">
