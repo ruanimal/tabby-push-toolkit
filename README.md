@@ -1,5 +1,7 @@
 # tabby-push-toolkit
 
+[简体中文](README.md) | [English](README.en.md)
+
 通过当前已连接的 Tabby 终端会话把常用本地文件推送到精简远程环境。支持 Tabby SSH profile，也支持在普通终端中运行 `ssh` 后使用；连接沿用当前终端，包括 SSH 跳板链路，不另建 SCP/SFTP 连接。优先使用远端已安装的 `trz`；没有可用接收端时，才以纯 POSIX Shell Base64 解码引导接收端。
 
 ## 功能
