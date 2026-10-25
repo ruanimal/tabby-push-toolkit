@@ -7,6 +7,7 @@ on:
     workflow_dispatch:
 
 permissions:
+    id-token: write # Required for npm Trusted Publishing (OIDC)
     contents: write # Required to create a GitHub Release
 
 concurrency:
@@ -47,15 +48,6 @@ jobs:
                   fs.appendFileSync(process.env.GITHUB_OUTPUT, `dist_tag=${prerelease ? 'next' : 'latest'}\nprerelease=${prerelease}\n`)
                   NODE
 
-            - name: Check npm credentials
-              run: |
-                  if [ -z "$NODE_AUTH_TOKEN" ]; then
-                      echo '::error::Configure the NPM_TOKEN repository secret before publishing.'
-                      exit 1
-                  fi
-              env:
-                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
             - name: Install test dependencies
               run: sudo apt-get update && sudo apt-get install -y busybox
 
@@ -69,7 +61,6 @@ jobs:
             - name: Publish to npm
               run: pnpm publish --access public --no-git-checks --tag "$NPM_DIST_TAG"
               env:
-                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
                   NPM_DIST_TAG: ${{ steps.version.outputs.dist_tag }}
 
             - name: Create GitHub Release
