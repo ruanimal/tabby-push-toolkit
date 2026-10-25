@@ -15,6 +15,7 @@ export interface PushSettings {
     receiverDirectory: string
     receiverDownloadSource: string
     receiverCustomSources: ReceiverDownloadSource[]
+    receiverBufferSize: string
     chunkDelayMs: number
     timeoutMs: number
 }
@@ -26,6 +27,7 @@ export const defaults: PushSettings = {
     receiverDirectory: DEFAULT_RECEIVER_DIRECTORY,
     receiverDownloadSource: 'github',
     receiverCustomSources: [],
+    receiverBufferSize: '10K',
     chunkDelayMs: 0,
     timeoutMs: 60000,
 }
@@ -49,8 +51,19 @@ export function validateName(name: string): string {
     return name
 }
 
+export function validateReceiverBufferSize(value: string): string {
+    const normalized = typeof value === 'string' ? value.trim().toUpperCase() : ''
+    const match = /^(\d+)([KMG]?)$/.exec(normalized)
+    const bytes = match ? Number(match[1]) * 1024 ** ['', 'K', 'M', 'G'].indexOf(match[2]) : NaN
+    if (!Number.isSafeInteger(bytes) || bytes < 1024 || bytes > 1024 ** 3) {
+        throw new Error('接收端缓冲区大小必须为 1K–1G，可填写字节数或使用 K、M、G 单位，例如 10K。')
+    }
+    return normalized
+}
+
 export function validateSettings(settings: PushSettings): void {
     receiverDownloadURLs(settings)
+    validateReceiverBufferSize(settings.receiverBufferSize)
     if (
         !Number.isInteger(settings.chunkDelayMs) ||
         settings.chunkDelayMs < 0 ||

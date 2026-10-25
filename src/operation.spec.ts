@@ -178,6 +178,47 @@ async function fixture(
 }
 
 describe('push over a real PTY', () => {
+    it.each(['bootstrap-and-upload', 'sender-only', 'upload-only'])(
+        'passes the configured -B value to every receiver for %s',
+        async (mode) => {
+            const f = await fixture({ published: true, nativeDecoder: true })
+            const log = path.join(f.root, 'receiver-args.log')
+            const receiver = Buffer.from(
+                f.receiver
+                    .toString()
+                    .replace(
+                        '#!/bin/sh\n',
+                        `#!/bin/sh\nif [ "$1" != --version ]; then printf '%s\\n' "$@" >> ${quote(log)}; fi\n`,
+                    ),
+            )
+            f.options.settings.receiverBufferSize = ' 2k '
+            f.options.bootstrapOnly = mode === 'sender-only'
+            f.options.loadReceiver = async () => ({ trz: receiver, tsz: f.sender })
+            if (mode !== 'bootstrap-and-upload') {
+                await fs.mkdir(path.dirname(f.receiverPath), { recursive: true })
+                await fs.writeFile(f.receiverPath, receiver, { mode: 0o700 })
+            }
+
+            await f.operation.run()
+
+            const stage = `.push-${f.options.token}`
+            const destinations = [
+                ...(mode !== 'upload-only' ? [path.join(path.dirname(f.receiverPath), stage)] : []),
+                ...(mode !== 'sender-only' ? [path.join(f.destination, stage)] : []),
+            ]
+            expect((await fs.readFile(log, 'utf8')).trimEnd().split('\n')).toEqual(
+                destinations.flatMap((destination) => ['-q', '-y', '-B', '2K', '--', destination]),
+            )
+            if (mode !== 'sender-only') {
+                expect(await fs.readFile(path.join(f.destination, f.filename))).toEqual(f.data)
+            } else {
+                expect(await fs.readFile(path.join(path.dirname(f.receiverPath), 'tsz'))).toEqual(
+                    f.sender,
+                )
+            }
+        },
+    )
+
     it.each(
         [
             { shell: ['/bin/bash', '--norc'], history: 'history 1000' },

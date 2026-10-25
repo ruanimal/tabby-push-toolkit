@@ -147,6 +147,17 @@ import { ReceiverService } from './receiver.service'
         </p>
         <h4>传输设置</h4>
         <label
+            >接收端缓冲区大小（-B）<input
+                class="form-control"
+                [(ngModel)]="draft.receiverBufferSize"
+                placeholder="10K"
+                aria-label="接收端缓冲区大小"
+        /></label>
+        <p class="text-muted">
+            默认 10K，范围 1K–1G，可填写字节数或使用 K、M、G 单位，例如 64K、1M。 用于引导安装 tsz
+            和后续文件上传；中继链路会截断大消息时可调小。
+        </p>
+        <label
             >引导分块间隔（毫秒）<input
                 class="form-control"
                 type="number"

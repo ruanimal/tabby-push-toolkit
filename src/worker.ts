@@ -1,11 +1,12 @@
 import decoder from '../scripts/bootstrap-decoder.sh?raw'
 import worker from '../scripts/remote-worker.sh?raw'
 import { quote, remotePath, receiverLocation } from './shell'
-import { DEFAULT_RECEIVER_DIRECTORY } from './models'
+import { DEFAULT_RECEIVER_DIRECTORY, defaults, validateReceiverBufferSize } from './models'
 
 export interface WorkerOptions {
     token: string
     receiverDirectory: string
+    receiverBufferSize?: string
     destination?: string
     filename?: string
     fileSize?: number
@@ -22,6 +23,9 @@ export function workerCommand(options: WorkerOptions): string {
     )
         throw new Error('Invalid file size')
     const receiver = receiverLocation(options.receiverDirectory)
+    const receiverBufferSize = validateReceiverBufferSize(
+        options.receiverBufferSize ?? defaults.receiverBufferSize,
+    )
     const receiverDirectory =
         (options.receiverDirectory || DEFAULT_RECEIVER_DIRECTORY).replace(/\/+$/, '') || '/'
     const senderPath = `${receiverDirectory === '/' ? '' : receiverDirectory}/tsz`
@@ -30,6 +34,7 @@ export function workerCommand(options: WorkerOptions): string {
         `receiver_dir=${receiver.directory}`,
         `bootstrap_receiver=${receiver.command}`,
         `bootstrap_sender=${remotePath(senderPath)}`,
+        `receiver_buffer_size=${quote(receiverBufferSize)}`,
         `bootstrap_only=${options.bootstrapOnly ? 1 : 0}`,
         `destination=${options.bootstrapOnly ? "''" : remotePath(options.destination ?? '')}`,
         `filename=${quote(options.filename ?? '')}`,

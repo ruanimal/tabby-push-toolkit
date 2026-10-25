@@ -249,7 +249,12 @@ export class PushOperation {
         let senderDirectory: string | undefined
         try {
             this.options.status(this.options.bootstrapOnly ? '检测远端传输端…' : '检测远端接收端…')
-            const [launcher, ...script] = workerCommand(this.options).trimEnd().split('\n')
+            const [launcher, ...script] = workerCommand({
+                ...this.options,
+                receiverBufferSize: this.options.settings.receiverBufferSize,
+            })
+                .trimEnd()
+                .split('\n')
             this.send(`${launcher}\n`)
             // Wait until the interactive shell has handed the TTY to our child reader.
             // In particular, Zsh's line editor can otherwise consume or transform early input.

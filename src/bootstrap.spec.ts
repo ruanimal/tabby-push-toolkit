@@ -11,6 +11,37 @@ afterEach(async () => {
     for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true })
 })
 
+describe('worker receiver buffer size', () => {
+    it.each([
+        [undefined, '10K'],
+        ['64K', '64K'],
+        [' 1m ', '1M'],
+        ['1024', '1024'],
+    ])('uses %j as the buffer size, defaulting to 10K', (receiverBufferSize, expected) => {
+        const command = workerCommand({
+            token: 'a'.repeat(32),
+            receiverDirectory: '~/.local/bin',
+            bootstrapOnly: true,
+            receiverBufferSize,
+        })
+        expect(command).toContain(`receiver_buffer_size='${expected}'\n`)
+    })
+
+    it.each(['', '0', '2G', '10K; echo bad'])(
+        'rejects %j before sending a worker',
+        (receiverBufferSize) => {
+            expect(() =>
+                workerCommand({
+                    token: 'a'.repeat(32),
+                    receiverDirectory: '~/.local/bin',
+                    bootstrapOnly: true,
+                    receiverBufferSize,
+                }),
+            ).toThrow('缓冲区大小')
+        },
+    )
+})
+
 it('does not evaluate a worker whose script terminator was not received', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'push-incomplete-worker-'))
     roots.push(root)

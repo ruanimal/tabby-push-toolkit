@@ -125,6 +125,51 @@ describe('settings persistence with Tabby ConfigProxy', () => {
     })
 })
 
+describe('receiver buffer size settings', () => {
+    it('defaults to 10K for existing configurations', () => {
+        const f = fixture()
+        expect(f.component.draft.receiverBufferSize).toBe('10K')
+        expect(f.real).toEqual({})
+    })
+
+    it.each(['1K', '10K', '64K', '1M', '1G', '1024', '1073741824', ' 64k '])(
+        'persists a valid buffer size %j',
+        async (receiverBufferSize) => {
+            const f = fixture()
+            f.component.draft.receiverBufferSize = receiverBufferSize
+            await f.component.save()
+            expect(f.component.error).toBe('')
+            expect(f.component.saved).toBe(true)
+            expect(f.persisted()?.receiverBufferSize).toBe(receiverBufferSize)
+        },
+    )
+
+    it.each([
+        '',
+        ' ',
+        '0',
+        '1023',
+        '1073741825',
+        '2G',
+        '-1K',
+        '1.5M',
+        'NaN',
+        '10K; echo bad',
+        '10K\nGO',
+    ])(
+        'rejects an invalid buffer size %j without changing live settings',
+        async (receiverBufferSize) => {
+            const f = fixture()
+            f.component.draft.receiverBufferSize = receiverBufferSize
+            await f.component.save()
+            expect(f.component.error).toContain('缓冲区大小')
+            expect(f.component.saved).toBe(false)
+            expect(f.real).toEqual({})
+            expect(f.save).not.toHaveBeenCalled()
+        },
+    )
+})
+
 describe('receiver download settings', () => {
     it('saves custom sources and uses the selected source before the built-in backups', async () => {
         const f = fixture()
