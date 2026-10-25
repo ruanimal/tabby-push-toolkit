@@ -60,6 +60,9 @@ async function fixture(
                 HOME: root,
                 PATH: bin,
                 PTY_TEST_PS1: options.prompt ?? '',
+                HISTFILE: path.join(root, '.shell_history'),
+                HISTSIZE: '1000',
+                SAVEHIST: '1000',
             },
         },
     )
@@ -175,6 +178,55 @@ async function fixture(
 }
 
 describe('push over a real PTY', () => {
+    it.each(
+        [
+            { shell: ['/bin/bash', '--norc'], history: 'history 1000' },
+            { shell: ['/usr/bin/busybox', 'ash'], history: 'history 1000' },
+            { shell: ['/usr/bin/zsh', '-f'], history: 'fc -l 1' },
+        ].flatMap((shell) => [false, true].map((cancel) => ({ ...shell, cancel }))),
+    )('keeps worker scripts out of command history with %j', async ({ shell, history, cancel }) => {
+        const f = await fixture({ shell })
+        await fs.mkdir(path.dirname(f.receiverPath), { recursive: true })
+        await fs.writeFile(f.receiverPath, f.receiver, { mode: 0o700 })
+        await fs.writeFile(path.join(path.dirname(f.receiverPath), 'tsz'), f.sender, {
+            mode: 0o700,
+        })
+        f.options.bootstrapOnly = true
+        f.child.stdin.write("printf 'USER_HISTORY_BEFORE\\n'\n")
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        if (cancel) {
+            const feed = f.operation.feedFromSession.bind(f.operation)
+            f.operation.feedFromSession = (data) => {
+                const output = feed(data)
+                if (f.transcript().includes(`\x1ePT${f.options.token}:SCRIPT_READY\x1f`))
+                    f.operation.cancel()
+                return output
+            }
+        }
+        try {
+            if (cancel) await expect(f.operation.run()).rejects.toThrow('取消')
+            else await f.operation.run()
+        } catch (error) {
+            throw new Error(`${error}\n${f.transcript().slice(-4000)}`)
+        }
+        f.enableManual()
+        f.child.stdin.write("printf 'USER_HISTORY_AFTER\\n'\n")
+        f.child.stdin.write(
+            `printf '\\036HISTORY_BEGIN\\037\\n'; ${history}; printf '\\036HISTORY_END\\037\\n'\n`,
+        )
+        const end = '\x1eHISTORY_END\x1f'
+        const deadline = Date.now() + 3000
+        while (!f.transcript().includes(end) && Date.now() < deadline)
+            await new Promise((resolve) => setTimeout(resolve, 20))
+        const output = f.transcript().split('\x1eHISTORY_BEGIN\x1f')[1]?.split(end)[0]
+        expect(output, f.transcript().slice(-2000)).toBeDefined()
+        expect(output).toContain('USER_HISTORY_BEFORE')
+        expect(output).toContain('USER_HISTORY_AFTER')
+        expect(output).not.toContain('decode_chunk')
+        expect(output).not.toContain('bootstrap_receiver=')
+        expect(output).not.toContain('report SENDER_READY')
+    })
+
     it.each([
         { kubeExec: true, maxInputBytes: undefined, installedReceiver: false },
         { kubeExec: true, maxInputBytes: 16 * 1024, installedReceiver: false },

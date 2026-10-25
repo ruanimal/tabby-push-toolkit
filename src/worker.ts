@@ -39,7 +39,19 @@ export function workerCommand(options: WorkerOptions): string {
         decoder,
         worker,
     ].join('\n')
-    // Keep physical lines short for canonical PTYs. No bracketed paste is used.
-    // Make both installed commands available in this terminal's parent shell after the worker exits.
-    return `sh -c '${script.replace(/'/g, `'"'"'`)}'; export PATH=${receiver.directory}:"$PATH"\n`
+    const marker = `PT${options.token}`
+    // The interactive shell records only this short launcher. A non-interactive child reads
+    // the worker as data, then evaluates it only after receiving the complete script.
+    const reader = [
+        `_pt_report() { printf "\\036PT${options.token}:%s\\037\\n" "$1"; };`,
+        'trap "_pt_report STOPPED" 0; trap "exit 130" 1 2 15;',
+        '_pt_script=; _pt_nl=$(printf "\\nx"); _pt_nl=${_pt_nl%x};',
+        '_pt_report SCRIPT_READY;',
+        'while IFS= read -r _pt_line; do',
+        `if [ "$_pt_line" = ${marker} ]; then eval "$_pt_script"; exit; fi;`,
+        '_pt_script=$_pt_script$_pt_line$_pt_nl;',
+        'done; exit 1',
+    ].join(' ')
+    // Keep payload lines short for canonical PTYs and export PATH in the parent shell.
+    return ` sh -c ${quote(reader)}; export PATH=${receiver.directory}:"$PATH"\n${script}\n${marker}\n`
 }

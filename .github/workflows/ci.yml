@@ -11,6 +11,6 @@ jobs:
             - uses: actions/setup-node@v4
               with:
                   node-version: 22
-            - run: sudo apt-get update && sudo apt-get install -y busybox
+            - run: sudo apt-get update && sudo apt-get install -y busybox zsh
             - run: pnpm install --frozen-lockfile
             - run: pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build

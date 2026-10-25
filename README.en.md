@@ -86,6 +86,7 @@ The remote system needs POSIX `sh`, `mkdir`, `rm`, `mv`, `ln`, and `wc`. Initial
 - Start operations at an idle shell prompt that supports POSIX command quoting. Full-screen applications are rejected, but not every foreground process or unsubmitted command can be detected reliably.
 - Transfers use the current terminal session without requiring a specific connection type. Character filtering, paste limits, and tmux/relay behavior along the actual connection path still need testing on the target setup; arbitrary intermediary chains are not guaranteed to work.
 - All sessions use `trz -B 10K` when installing `tsz` and uploading files to reduce the risk of large messages being truncated by kube-exec and other relays. Transfers use Base64 without binary mode.
+- A non-interactive child shell receives the full bootstrap script, keeping it out of the interactive shell's command history. A short launcher command may remain. Verified with Bash, BusyBox ash, and Zsh. User history settings and entries left by older versions are preserved.
 - Initial bootstrapping waits for an acknowledgment after each chunk. Larger receivers and higher-latency connections take longer; pure shell decoding also depends on the remote CPU and shell implementation. The default chunk delay is 0 ms, sending the next chunk immediately after acknowledgment. Existing nonzero settings are preserved; set the delay to 0 in settings, increasing it if the connection limits pasted input. Subsequent file transfers use trzsz. Bootstrap checksums detect accidental corruption; they are not a substitute for verifying source authenticity.
 - Only regular files are supported; directory uploads and resumable transfers are not provided. A local temporary copy is created before upload so changes to the source file do not affect the transfer. If no receiver is cached and all download sources are unavailable, manually supply the all-platform archive or install a compatible `trz` on the remote system first.
 - Overwriting is disabled by default. Committing uses a hard link to reject existing regular files. Targets that are directories or symbolic links are always rejected. When overwriting is allowed, the transfer completes in a temporary area in the same directory before the file is renamed into place.
@@ -102,7 +103,7 @@ pnpm test
 pnpm build
 ```
 
-Pseudo-terminal integration tests require Linux, Python 3, and BusyBox. By default, tests use a real Node.js `trz` server and the client engine actually bundled in the published `tabby-trzsz` npm package. They cover initial bootstrapping, receiver reuse, empty files, binary data, special paths, fragmented output, overwrite rejection, failure without committing, and cancellation recovery. Decoder tests cover every byte value and invalid input under both `/bin/sh` and BusyBox ash.
+Pseudo-terminal integration tests require Linux, Python 3, BusyBox, and Zsh. By default, tests use a real Node.js `trz` server and the client engine actually bundled in the published `tabby-trzsz` npm package. They cover initial bootstrapping, receiver reuse, empty files, binary data, special paths, fragmented output, overwrite rejection, failure without committing, and cancellation recovery. Decoder tests cover every byte value and invalid input under both `/bin/sh` and BusyBox ash.
 
 To additionally test a local native receiver:
 

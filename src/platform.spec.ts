@@ -65,9 +65,10 @@ exec /usr/bin/od -A n -t u1 -N 6 "$PROBE_ELF"
         receiverDirectory: path.join(root, 'tools'),
         bootstrapOnly: true,
     }).replace('LC_ALL=C', `${overrides}\nLC_ALL=C`)
-    const result = spawnSync(path.join(bin, 'sh'), ['-c', command], {
+    const boundary = command.indexOf('\n')
+    const result = spawnSync(path.join(bin, 'sh'), ['-c', command.slice(0, boundary)], {
         cwd: root,
-        input: '',
+        input: command.slice(boundary + 1),
         encoding: 'utf8',
         timeout: 5000,
         env: {

@@ -11,6 +11,28 @@ afterEach(async () => {
     for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true })
 })
 
+it('does not evaluate a worker whose script terminator was not received', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'push-incomplete-worker-'))
+    roots.push(root)
+    const command = workerCommand({
+        token: 'a'.repeat(32),
+        receiverDirectory: path.join(root, 'tools'),
+        bootstrapOnly: true,
+    })
+    const boundary = command.indexOf('\n')
+    const input = command.slice(boundary + 1).replace(/PT[a-f0-9]{32}\n$/, '')
+    const result = spawnSync('/bin/sh', ['-c', command.slice(0, boundary)], {
+        input,
+        encoding: 'utf8',
+        timeout: 5000,
+    })
+    expect(result.error).toBeUndefined()
+    expect(result.stdout).toContain(':SCRIPT_READY')
+    expect(result.stdout).toContain(':STOPPED')
+    expect(result.stdout).not.toContain(':PROBE:')
+    expect(result.stdout).not.toContain(':ERROR:INPUT')
+})
+
 describe.each([false, true])('bootstrap file validation with native=%s', (native) => {
     it.each([false, true])('verifies the whole file with corrupted=%s', async (corrupted) => {
         const root = await fs.mkdtemp(path.join(os.tmpdir(), 'push-bootstrap-check-'))
@@ -34,9 +56,10 @@ describe.each([false, true])('bootstrap file validation with native=%s', (native
         for (let offset = 0; offset < transmitted.length; offset += 768)
             lines.push(transmitted.subarray(offset, offset + 768).toString('base64'))
         lines.push('END', '')
-        const result = spawnSync('/bin/sh', ['-c', command], {
+        const boundary = command.indexOf('\n')
+        const result = spawnSync('/bin/sh', ['-c', command.slice(0, boundary)], {
             env: { ...process.env, PATH: bin, HOME: root },
-            input: lines.join('\n'),
+            input: command.slice(boundary + 1) + lines.join('\n'),
             encoding: 'utf8',
             timeout: 5000,
         })
