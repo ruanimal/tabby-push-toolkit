@@ -37,6 +37,8 @@ async function fixture(
         receiverDirectory?: string
         prompt?: string
         nativeDecoder?: boolean
+        kubeExec?: boolean
+        maxInputBytes?: number
     } = {},
 ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "push-test ' -"))
@@ -82,10 +84,20 @@ async function fixture(
     )
     const downloads = path.join(root, 'downloads')
     await fs.mkdir(downloads)
+    const inputSizes: number[] = []
+    const write = (buffer: Buffer): void => {
+        // tabby-ws-term's kube-exec handler uses UTF-8 JSON strings in both directions.
+        const input = options.kubeExec
+            ? Buffer.from(JSON.parse(JSON.stringify({ Op: 'stdin', Data: buffer.toString() })).Data)
+            : buffer
+        inputSizes.push(input.length)
+        // Model a relay that truncates oversized stdin messages before writing to its PTY.
+        child.stdin.write(input.subarray(0, options.maxInputBytes ?? input.length))
+    }
     let managed = true
     const send = (buffer: Buffer): void => {
         if (managed) operation.feedFromTerminal(buffer)
-        else child.stdin.write(buffer)
+        else write(buffer)
     }
     const client = options.published
         ? await publishedClient(send, downloads)
@@ -115,15 +127,17 @@ async function fixture(
         loadReceiver: async () => ({ trz: receiver, tsz: sender }),
         status: (status) => statuses.push(status),
     }
-    const operation = new PushOperation(operationOptions, client, (buffer) => {
-        child.stdin.write(buffer)
-    })
+    const operation = new PushOperation(operationOptions, client, write)
     let transcript = ''
     let displayed = ''
     child.stderr.on('data', (buffer) => {
         transcript += buffer.toString()
     })
     child.stdout.on('data', (buffer: Buffer) => {
+        if (options.kubeExec)
+            buffer = Buffer.from(
+                JSON.parse(JSON.stringify({ Op: 'stdout', Data: buffer.toString() })).Data,
+            )
         transcript += buffer.toString()
         if (!managed) {
             client.processServerOutput(buffer)
@@ -156,10 +170,46 @@ async function fixture(
         operation,
         transcript: () => transcript,
         displayed: () => displayed,
+        inputSizes,
     }
 }
 
 describe('push over a real PTY', () => {
+    it.each([
+        { kubeExec: true, maxInputBytes: undefined, installedReceiver: false },
+        { kubeExec: true, maxInputBytes: 16 * 1024, installedReceiver: false },
+        { kubeExec: true, maxInputBytes: 16 * 1024, installedReceiver: true },
+        { kubeExec: false, maxInputBytes: 16 * 1024, installedReceiver: false },
+    ])('bootstraps with transport %j', async ({ kubeExec, maxInputBytes, installedReceiver }) => {
+        const f = await fixture({
+            published: true,
+            kubeExec,
+            maxInputBytes,
+            nativeDecoder: true,
+        })
+        // A real tsz binary is much larger than the small executable wrapper used by this fixture.
+        // Data after exec is never interpreted, but makes its transfer span full protocol chunks.
+        const sender = Buffer.concat([f.sender, randomBytes(100001)])
+        f.options.loadReceiver = async () => ({ trz: f.receiver, tsz: sender })
+        if (installedReceiver) {
+            await fs.mkdir(path.dirname(f.receiverPath), { recursive: true })
+            await fs.writeFile(f.receiverPath, f.receiver, { mode: 0o700 })
+            f.options.bootstrapOnly = true
+        }
+        try {
+            await f.operation.run()
+        } catch (error) {
+            throw new Error(
+                `${error}\ninput sizes: ${f.inputSizes.slice(-8)}\n${f.transcript().slice(-1000)}`,
+            )
+        }
+        expect(await fs.readFile(f.receiverPath)).toEqual(f.receiver)
+        expect(await fs.readFile(path.join(path.dirname(f.receiverPath), 'tsz'))).toEqual(sender)
+        if (!installedReceiver)
+            expect(await fs.readFile(path.join(f.destination, f.filename))).toEqual(f.data)
+        if (maxInputBytes) expect(Math.max(...f.inputSizes)).toBeLessThanOrEqual(maxInputBytes)
+    })
+
     it.each([['/bin/sh'], ['/usr/bin/busybox', 'ash'], ['/bin/bash', '--norc']])(
         'bootstraps binary data with native Base64 under %j',
         async (...shell) => {
@@ -335,12 +385,14 @@ describe('push over a real PTY', () => {
         await expect(fs.stat(f.receiverPath)).rejects.toThrow()
     })
 
-    it.skipIf(!process.env.TRZ_ALL_ARCHIVE)(
-        'extracts the real v1.3.0 release through the cache and uploads with its receiver',
-        async () => {
+    it.skipIf(!process.env.TRZ_ALL_ARCHIVE).each([false, true])(
+        'extracts the real v1.3.0 release through the cache and uploads with kube-exec=%s',
+        async (kubeExec) => {
             const f = await fixture({
                 published: true,
                 receiverDirectory: "~/release tools ' $HOME/bin/",
+                kubeExec,
+                maxInputBytes: 16 * 1024,
             })
             const archivePath = process.env.TRZ_ALL_ARCHIVE
             if (!archivePath) throw new Error('Missing release test fixture')
