@@ -106,9 +106,17 @@ export class PushService {
                 throw new Error('请选择已连接的终端，并确认远端已进入 Shell。')
             if (tab.alternateScreenActive)
                 throw new Error('请先退出全屏程序，回到远端 Shell 提示符。')
-            if (!tab.trzsz)
-                throw new Error('trzsz 尚未就绪。请重新打开终端，并检查 tabby-trzsz 是否已被禁用。')
-            if (tab.trzsz.isTransferringFiles()) throw new Error('当前终端已有传输正在进行。')
+            const client = tab.trzsz
+            if (
+                !client ||
+                typeof client.uploadFiles !== 'function' ||
+                typeof client.stopTransferringFiles !== 'function' ||
+                typeof client.isTransferringFiles !== 'function'
+            )
+                throw new Error(
+                    'tabby-trzsz 未就绪或接口不兼容。请安装并启用 tabby-trzsz 1.0.7 或兼容的 1.x 版本，重启 Tabby 后重新打开终端。',
+                )
+            if (client.isTransferringFiles()) throw new Error('当前终端已有传输正在进行。')
             const settings = JSON.parse(JSON.stringify(this.settings)) as PushSettings
             validateSettings(settings)
             receiverLocation(settings.receiverDirectory)
@@ -153,7 +161,7 @@ export class PushService {
                         writeStatus(`${operationName}耗时：${elapsed()}。`)
                     },
                 },
-                tab.trzsz,
+                client,
                 (data) => {
                     if (session.open) session.write(data)
                 },

@@ -3,7 +3,7 @@ import { promises as fs, Stats } from 'fs'
 import { Subject } from 'rxjs'
 import type { ConfigService, HotkeysService, NotificationsService } from 'tabby-core'
 import { BaseTerminalTabComponent } from 'tabby-terminal'
-import type { OperationOptions } from './operation'
+import type { OperationOptions, TransferClient } from './operation'
 import type { ReceiverService } from './receiver.service'
 import { defaults, SavedFile } from './models'
 import { PushService, PushTerminal } from './push.service'
@@ -49,7 +49,11 @@ function fixture() {
             middleware: { unshift: vi.fn(), push: vi.fn(), remove: vi.fn() },
         },
         sessionChanged$: new Subject(),
-        trzsz: { isTransferringFiles: () => false },
+        trzsz: {
+            uploadFiles: vi.fn(async () => undefined),
+            stopTransferringFiles: vi.fn(),
+            isTransferringFiles: () => false,
+        },
         write: vi.fn(),
     }) as unknown as PushTerminal
     const notifications = { info: vi.fn(), error: vi.fn() }
@@ -61,6 +65,25 @@ function fixture() {
     )
     return { tab, notifications, service }
 }
+
+describe('shared trzsz client', () => {
+    it.each(['missing', 'uploadFiles', 'stopTransferringFiles', 'isTransferringFiles'] as const)(
+        'rejects an unavailable client or missing %s before touching the session',
+        async (missing) => {
+            const f = fixture()
+            if (missing === 'missing') f.tab.trzsz = undefined
+            else delete (f.tab.trzsz as Partial<TransferClient>)[missing]
+            await f.service.bootstrap(f.tab)
+            expect(f.notifications.error).toHaveBeenCalledWith(
+                'Push Toolkit：引导失败',
+                expect.stringContaining('tabby-trzsz 未就绪或接口不兼容'),
+            )
+            expect(runner.run).not.toHaveBeenCalled()
+            expect(f.tab.session?.middleware.unshift).not.toHaveBeenCalled()
+            expect(f.tab.session?.middleware.push).not.toHaveBeenCalled()
+        },
+    )
+})
 
 describe('menu operation timing', () => {
     it('times each bootstrap separately and freezes the duration before local cleanup', async () => {

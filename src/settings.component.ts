@@ -18,7 +18,7 @@ import { ReceiverService } from './receiver.service'
             空闲提示符下操作；上传期间输入会被接管，Ctrl+C 可取消。
         </p>
         <p class="text-muted">
-            已包含 tabby-trzsz，无需另外安装。优先使用远端已安装的
+            需要安装并启用 tabby-trzsz 1.0.7 或兼容的 1.x 版本。优先使用远端已安装的
             trz；需要引导时自动下载固定版本，无需手动选择平台或本地文件。
         </p>
 

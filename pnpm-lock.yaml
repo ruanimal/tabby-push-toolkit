@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      tabby-trzsz:
-        specifier: 1.0.7
-        version: 1.0.7
       tar-stream:
         specifier: ^3.2.2
         version: 3.2.2
@@ -69,6 +66,9 @@ importers:
       tabby-terminal:
         specifier: 1.0.231-nightly.0
         version: 1.0.231-nightly.0(a7f3b6904a772d165efa22a9d5509e58)
+      tabby-trzsz:
+        specifier: 1.0.7
+        version: 1.0.7
       trzsz:
         specifier: 1.1.6
         version: 1.1.6

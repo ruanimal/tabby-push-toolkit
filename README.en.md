@@ -20,11 +20,11 @@ Throughout this document, “remote” refers to the target environment in the c
 
 ## Installation and dependencies
 
-The runtime dependencies include the pinned **`tabby-trzsz@1.0.7`** package; users do not need to install it separately. Push Toolkit explicitly imports its Angular module so its settings and terminal decorators work even when npm installs the dependency in a nested directory. Angular deduplicates the module if Tabby also discovers it during plugin scanning.
+Install and enable **`tabby-trzsz@^1.0.7`** in Tabby (1.0.7 or a compatible 1.x release). An existing compatible installation is reused. It is declared as a peer dependency and loaded by Tabby. Push Toolkit neither includes nor directly imports another trzsz Angular module, avoiding duplicate settings and transfer middleware from different versions. Operations report missing, disabled, or incompatible client APIs before writing to the terminal.
 
-Uploads reuse the `trzsz.uploadFiles()` API exposed by `tabby-trzsz` on the current terminal. During each operation, the toolkit coordinates its startup command and session stream rather than installing a second protocol engine. This integration targets version 1.0.7 and has contract and transfer tests against the actual published npm package.
+Uploads reuse the `trzsz.uploadFiles()` API exposed by `tabby-trzsz` on the current terminal. During each operation, the toolkit coordinates its startup command and session stream rather than installing a second protocol engine. Regression tests use the published 1.0.7 npm package pinned as a development dependency. Other compatible versions are checked for the required APIs but have not been tested individually.
 
-The project is currently available as source and has not been published to npm. To load it for development:
+The project is currently available as source and has not been published to npm. Development loading also requires installing and enabling the plugin in Tabby first; the development dependency installed by pnpm is only for building and testing. To load it for development:
 
 ```sh
 pnpm install
@@ -35,10 +35,10 @@ TABBY_PLUGINS=/absolute/path/to/tabby-push-toolkit tabby
 Fully quit any existing Tabby processes before restarting. `TABBY_PLUGINS` points to the project directory, using the same plugin structure as `tabby-tmux`. Run `pnpm pack` to create `tabby-push-toolkit-0.1.0.tgz`, then install it with npm in Tabby's user plugin directory and restart Tabby. For example:
 
 ```sh
-npm --prefix /path/to/tabby/plugins install /absolute/path/to/tabby-push-toolkit-0.1.0.tgz --omit=dev --legacy-peer-deps
+npm --prefix /path/to/tabby/plugins install /absolute/path/to/tabby-push-toolkit-0.1.0.tgz 'tabby-trzsz@^1.0.7' --omit=dev --legacy-peer-deps
 ```
 
-Tabby Desktop provides Angular 15, RxJS 7, `tabby-core`, `tabby-electron`, `tabby-settings`, and `tabby-terminal`.
+`--legacy-peer-deps` skips peer installation and version checks, so the example installs trzsz explicitly. Omit `tabby-trzsz@^1.0.7` from the command if a compatible version is already installed; update incompatible versions first. Tabby Desktop provides Angular 15, RxJS 7, `tabby-core`, `tabby-electron`, `tabby-settings`, and `tabby-terminal`.
 
 ## Initial setup
 

@@ -20,11 +20,11 @@
 
 ## 安装与依赖
 
-运行依赖中已固定包含 **`tabby-trzsz@1.0.7`**，不需要用户手动安装它。Push Toolkit 显式导入其 Angular 模块，因此即使 npm 把依赖安装到嵌套目录，也能启用其设置和终端装饰器。同一模块被 Tabby 扫描到时由 Angular 去重。
+需要在 Tabby 中安装并启用 **`tabby-trzsz@^1.0.7`**（1.0.7 或兼容的 1.x 版本）。已有兼容版本时直接复用，无需重复安装。该插件以 `peerDependencies` 声明，由 Tabby 统一加载；Push Toolkit 不携带或直接导入另一份 trzsz Angular 模块，避免不同版本同时注册设置和传输中间件。缺失、禁用或所需接口不兼容时，操作会在写入终端前提示。
 
-文件上传复用 `tabby-trzsz` 暴露在当前终端上的 `trzsz.uploadFiles()`。工具包在一次操作期间协调它的启动命令和会话流，不另外安装第二套协议引擎。该适配针对 1.0.7，并有实际 npm 发布包的契约及传输测试。
+文件上传复用 `tabby-trzsz` 暴露在当前终端上的 `trzsz.uploadFiles()`。工具包在一次操作期间协调它的启动命令和会话流，不另外安装第二套协议引擎。回归测试使用开发依赖中固定的 1.0.7 npm 发布包；其他兼容版本会检查所需接口，但尚未逐版本验证。
 
-目前为源码实现，尚未发布到 npm。开发加载方式：
+目前为源码实现，尚未发布到 npm。开发加载前也需在 Tabby 中安装并启用上述插件；`pnpm install` 中的开发依赖只用于构建和测试。开发加载方式：
 
 ```sh
 pnpm install
@@ -35,10 +35,10 @@ TABBY_PLUGINS=/absolute/path/to/tabby-push-toolkit tabby
 需完全退出已有 Tabby 进程再启动。`TABBY_PLUGINS` 指向项目目录，与 `tabby-tmux` 的插件结构相同。运行 `pnpm pack` 可生成 `tabby-push-toolkit-0.1.0.tgz` 安装包；在 Tabby 的用户插件目录中通过 npm 安装该包后重启即可，例如：
 
 ```sh
-npm --prefix /path/to/tabby/plugins install /absolute/path/to/tabby-push-toolkit-0.1.0.tgz --omit=dev --legacy-peer-deps
+npm --prefix /path/to/tabby/plugins install /absolute/path/to/tabby-push-toolkit-0.1.0.tgz 'tabby-trzsz@^1.0.7' --omit=dev --legacy-peer-deps
 ```
 
-Angular 15、RxJS 7 和 `tabby-core`、`tabby-electron`、`tabby-settings`、`tabby-terminal` 由桌面版 Tabby 提供。
+使用 `--legacy-peer-deps` 会跳过 peer 依赖的安装和版本检查，因此上例显式安装 trzsz；已有兼容版本时可省略命令中的 `tabby-trzsz@^1.0.7`。不要忽略不兼容版本，需先更新。Angular 15、RxJS 7 和 `tabby-core`、`tabby-electron`、`tabby-settings`、`tabby-terminal` 由桌面版 Tabby 提供。
 
 ## 首次配置
 

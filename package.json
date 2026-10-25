@@ -35,7 +35,6 @@
         "prepack": "pnpm run build"
     },
     "dependencies": {
-        "tabby-trzsz": "1.0.7",
         "tar-stream": "^3.2.2"
     },
     "peerDependencies": {
@@ -46,7 +45,8 @@
         "tabby-core": "*",
         "tabby-electron": "*",
         "tabby-settings": "*",
-        "tabby-terminal": "*"
+        "tabby-terminal": "*",
+        "tabby-trzsz": "^1.0.7"
     },
     "devDependencies": {
         "@angular/common": "15.2.10",
@@ -67,6 +67,7 @@
         "tabby-electron": "1.0.231-nightly.0",
         "tabby-settings": "1.0.231-nightly.0",
         "tabby-terminal": "1.0.231-nightly.0",
+        "tabby-trzsz": "1.0.7",
         "trzsz": "1.1.6",
         "typescript": "^4.9.5",
         "vitest": "^4.1.10",
