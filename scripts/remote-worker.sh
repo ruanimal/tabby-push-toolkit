@@ -30,7 +30,7 @@ find_receiver() {
 }
 platform=unknown architecture=unknown
 available=0
-if find_receiver "$receiver" || find_receiver trz || find_receiver "$bootstrap_receiver"; then
+if find_receiver "$bootstrap_receiver" || find_receiver trz; then
     available=1
 else
     command -v uname >/dev/null 2>&1 || fail MISSING_uname
@@ -43,8 +43,9 @@ case "$action" in
     BOOT:*)
         command -v chmod >/dev/null 2>&1 || fail MISSING_chmod
         receiver=$bootstrap_receiver
-        expected=${action#BOOT:}
-        receiver_dir=${receiver%/*}
+        details=${action#BOOT:}
+        sender_size=${details##*:}
+        expected=${details%:*}
         mkdir -p "$receiver_dir" || fail RECEIVER_DIRECTORY
         stage_candidate="$receiver_dir/.push-$token"
         mkdir "$stage_candidate" || fail RECEIVER_STAGE
@@ -65,7 +66,27 @@ case "$action" in
         chmod u+x "$boot_stage/trz" || fail CHMOD
         "$boot_stage/trz" --version >/dev/null 2>&1 || fail RECEIVER_EXEC
         [ ! -d "$receiver" ] || fail RECEIVER_DIRECTORY
-        mv -f "$boot_stage/trz" "$receiver" || fail RECEIVER_COMMIT
+        # Run the staged receiver first; publish it only after tsz is fully verified.
+        receiver="$boot_stage/trz"
+        report SENDER_READY
+        IFS= read -r action || fail INPUT
+        [ "$action" = GO ] || fail CANCELLED
+        "$receiver" -q -y -B 64K -- "$boot_stage"
+        rc=$?
+        [ "$rc" = 0 ] || fail TRANSFER
+        report SENDER_RECEIVED
+        IFS= read -r action || fail INPUT
+        [ "$action" = COMMIT ] || fail CANCELLED
+        [ -f "$boot_stage/tsz" ] && [ ! -L "$boot_stage/tsz" ] || fail SENDER_MISSING
+        actual=$(wc -c < "$boot_stage/tsz") || fail SIZE
+        [ "$actual" -eq "$sender_size" ] || fail SIZE
+        chmod u+x "$boot_stage/tsz" || fail CHMOD
+        "$boot_stage/tsz" --version >/dev/null 2>&1 || fail SENDER_EXEC
+        [ ! -d "$receiver_dir/tsz" ] || fail SENDER_COMMIT
+        mv -f "$boot_stage/tsz" "$receiver_dir/tsz" || fail SENDER_COMMIT
+        mv -f "$boot_stage/trz" "$bootstrap_receiver" || fail RECEIVER_COMMIT
+        receiver=$bootstrap_receiver
+        report SENDER_DONE
         ;;
     USE) [ "$available" = 1 ] || fail RECEIVER_MISSING ;;
     *) fail CANCELLED ;;

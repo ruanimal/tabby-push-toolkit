@@ -1,7 +1,11 @@
 import { adler32 } from './shell'
 import { FrameParser } from './frames'
-import { Receiver, PushSettings, selectReceiver } from './models'
+import { DEFAULT_RECEIVER_DIRECTORY, PushSettings } from './models'
 import { WorkerOptions, workerCommand } from './worker'
+import { ReceiverBinaries } from './receiver-cache'
+import { promises as fs } from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 
 /** Public methods exposed as terminal.trzsz by tabby-trzsz 1.0.7. */
 export interface TransferClient {
@@ -13,7 +17,11 @@ export interface TransferClient {
 export interface OperationOptions extends WorkerOptions {
     localPath: string
     settings: PushSettings
-    loadReceiver: (receiver: Receiver) => Promise<Buffer>
+    loadReceiver: (
+        platform: string,
+        architecture: string,
+        signal: AbortSignal,
+    ) => Promise<ReceiverBinaries>
     status: (message: string) => void
 }
 
@@ -24,6 +32,9 @@ function remoteError(code: string): Error {
         EXISTS: '目标文件已存在；请修改文件名或在条目中启用覆盖。',
         TARGET_TYPE: '目标是目录或符号链接；请选择普通文件路径。',
         RECEIVER_EXEC: '接收端无法执行；请检查远端架构、musl/glibc 兼容性和 noexec 挂载。',
+        SENDER_EXEC: 'tsz 无法执行；请检查远端架构和执行权限。',
+        SENDER_MISSING: 'tsz 上传不完整，未安装发送端。',
+        SENDER_COMMIT: '无法安装 tsz；请检查远端工具目录和写入权限。',
         CHMOD: '无法赋予执行权限；请检查文件系统和远端权限。',
         DECODE: '引导数据被截断、损坏或无法写入；请检查链路过滤和磁盘空间。',
         CHECKSUM: '引导文件大小或校验和不一致，未安装接收端。',
@@ -55,6 +66,7 @@ export class PushOperation {
     private stopSeen = false
     private stopped?: () => void
     private remoteStopping = false
+    private abortController = new AbortController()
 
     constructor(
         private options: OperationOptions,
@@ -117,6 +129,7 @@ export class PushOperation {
     private fail(error: Error): void {
         if (this.error || this.phase === 'closed') return
         this.error = error
+        this.abortController.abort(error)
         this.client.stopTransferringFiles()
         this.waiting?.reject(error)
         this.waiting = undefined
@@ -168,8 +181,24 @@ export class PushOperation {
         this.write(Buffer.from(text))
     }
 
+    private async transfer(localPath: string, received: string): Promise<void> {
+        this.phase = 'kickoff'
+        this.handshakeSeen = false
+        this.handshake = Buffer.alloc(0)
+        const upload = this.client.uploadFiles([localPath])
+        void upload.catch((error) =>
+            this.fail(error instanceof Error ? error : new Error(String(error))),
+        )
+        await this.wait(received)
+        await upload
+        if (this.error) throw this.error
+        this.phase = 'bootstrap'
+        this.send('COMMIT\n')
+    }
+
     async run(): Promise<void> {
         if (this.client.isTransferringFiles()) throw new Error('当前终端已有 trzsz 传输正在进行。')
+        let senderDirectory: string | undefined
         try {
             this.options.status('检测远端接收端…')
             // Pace shell program lines as well as data; never paste a large command at once.
@@ -182,11 +211,18 @@ export class PushOperation {
                 this.options.status('使用远端已安装的 trz…')
                 this.send('USE\n')
             } else {
-                const receiver = selectReceiver(this.options.settings.receivers, probe[1], probe[2])
-                const data = await this.options.loadReceiver(receiver)
-                if (!data.length) throw new Error('接收端文件为空。')
+                const tools = await this.options.loadReceiver(
+                    probe[1],
+                    probe[2],
+                    this.abortController.signal,
+                )
+                const data = tools.trz
+                if (!data.length || !tools.tsz.length) throw new Error('trz 或 tsz 文件为空。')
+                senderDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'tabby-push-tsz-'))
+                const sender = path.join(senderDirectory, 'tsz')
+                await fs.writeFile(sender, tools.tsz)
                 const [a, b] = adler32(data)
-                this.send(`BOOT:${data.length}:${a}:${b}\n`)
+                this.send(`BOOT:${data.length}:${a}:${b}:${tools.tsz.length}\n`)
                 await this.wait('BOOT')
                 let sequence = 0
                 let progress = -1
@@ -211,20 +247,16 @@ export class PushOperation {
                     await delay(this.options.settings.chunkDelayMs)
                 }
                 this.send('END\n')
+                await this.wait('SENDER_READY')
+                this.options.status(
+                    `通过 trzsz 安装 tsz 到 ${this.options.receiverDirectory || DEFAULT_RECEIVER_DIRECTORY}…`,
+                )
+                await this.transfer(sender, 'SENDER_RECEIVED')
+                await this.wait('SENDER_DONE')
             }
             await this.wait('READY')
             this.options.status('通过 trzsz 上传文件…')
-            this.phase = 'kickoff'
-            // Attach a rejection handler immediately: the remote may fail before RECEIVED.
-            const upload = this.client.uploadFiles([this.options.localPath])
-            void upload.catch((error) =>
-                this.fail(error instanceof Error ? error : new Error(String(error))),
-            )
-            await this.wait('RECEIVED')
-            await upload
-            if (this.error) throw this.error
-            this.phase = 'bootstrap'
-            this.send('COMMIT\n')
+            await this.transfer(this.options.localPath, 'RECEIVED')
             await this.wait('DONE')
             this.options.status('上传完成。')
         } catch (error) {
@@ -245,6 +277,10 @@ export class PushOperation {
                 ])
             }
             this.phase = 'closed'
+            if (senderDirectory)
+                await fs
+                    .rm(senderDirectory, { recursive: true, force: true })
+                    .catch(() => undefined)
         }
     }
 }

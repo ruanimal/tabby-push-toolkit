@@ -27,7 +27,8 @@
         "prepack": "pnpm run build"
     },
     "dependencies": {
-        "tabby-trzsz": "1.0.7"
+        "tabby-trzsz": "1.0.7",
+        "tar-stream": "^3.2.2"
     },
     "peerDependencies": {
         "@angular/common": "^15",
@@ -41,10 +42,10 @@
     },
     "devDependencies": {
         "@angular/common": "15.2.10",
-        "@angular/core": "15.2.10",
-        "@angular/forms": "15.2.10",
         "@angular/compiler": "15.2.10",
         "@angular/compiler-cli": "15.2.10",
+        "@angular/core": "15.2.10",
+        "@angular/forms": "15.2.10",
         "@ngtools/webpack": "15.2.11",
         "@types/node": "^20.3.1",
         "@typescript-eslint/eslint-plugin": "^5.62.0",

@@ -1,19 +1,24 @@
-import { describe, expect, it, vi } from 'vitest'
-import type { ConfigService } from 'tabby-core'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { promises as fs } from 'fs'
+import type { ConfigService, PlatformService } from 'tabby-core'
 import type { ElectronHostWindow, ElectronService } from 'tabby-electron'
-import { defaults, PushSettings } from './models'
+import { defaults, PushSettings, receiverDownloadURLs } from './models'
+import { RECEIVER_SOURCES } from './receiver-release'
+import type { ReceiverService } from './receiver.service'
 import { PushSettingsComponent } from './settings.component'
 
 vi.mock('@angular/core', () => ({ Component: () => (target: unknown) => target }))
-vi.mock('tabby-core', () => ({ ConfigService: class {} }))
+vi.mock('tabby-core', () => ({ ConfigService: class {}, PlatformService: class {} }))
 vi.mock('tabby-electron', () => ({ ElectronHostWindow: class {}, ElectronService: class {} }))
+vi.mock('./receiver.service', () => ({ ReceiverService: class {} }))
+afterEach(() => vi.restoreAllMocks())
 
 function fixture() {
     const real: Partial<PushSettings> = {}
-    const settings = {} as PushSettings
+    const settings = {} as typeof defaults
     // Tabby ConfigProxy exposes structural sections through a getter only,
     // and persists writes through setters on the section's individual leaves.
-    for (const key of Object.keys(defaults) as (keyof PushSettings)[]) {
+    for (const key of Object.keys(defaults) as (keyof typeof defaults)[]) {
         Object.defineProperty(settings, key, {
             enumerable: true,
             get: () => real[key] ?? defaults[key],
@@ -30,26 +35,37 @@ function fixture() {
     const save = vi.fn(async () => {
         persisted = JSON.parse(JSON.stringify(settings)) as PushSettings
     })
+    const receivers = { prefetch: vi.fn<ReceiverService['prefetch']>(async () => undefined) }
+    const platform = { getConfigPath: () => '/tmp/tabby-custom/config.yaml', openPath: vi.fn() }
     const component = new PushSettingsComponent(
         { store, save } as unknown as ConfigService,
         {} as ElectronService,
         {} as ElectronHostWindow,
+        platform as unknown as PlatformService,
+        receivers as unknown as ReceiverService,
     )
-    return { component, store, settings, real, save, persisted: () => persisted }
+    return {
+        component,
+        store,
+        settings,
+        real,
+        save,
+        platform,
+        receivers,
+        persisted: () => persisted,
+    }
 }
 
 describe('settings persistence with Tabby ConfigProxy', () => {
-    it.each(['trz', '', '/usr/local/bin/trz', '~/bin/trz'])(
-        'saves installed receiver setting %j without local bootstrap files',
-        async (receiverPath) => {
+    it.each(['~/.local/bin', '', '/usr/local/bin', '~/my tools', '~/tools/trz'])(
+        'saves remote tool directory %j without local bootstrap files',
+        async (receiverDirectory) => {
             const f = fixture()
-            f.component.draft.receiverPath = receiverPath
-            // An unfinished optional bootstrap row must not prevent using installed trz.
-            f.component.addReceiver()
+            f.component.draft.receiverDirectory = receiverDirectory
             await f.component.save()
             expect(f.component.error).toBe('')
             expect(f.component.saved).toBe(true)
-            expect(f.persisted()?.receiverPath).toBe(receiverPath)
+            expect(f.persisted()?.receiverDirectory).toBe(receiverDirectory)
         },
     )
 
@@ -57,12 +73,7 @@ describe('settings persistence with Tabby ConfigProxy', () => {
         const f = fixture()
         f.component.addFile()
         Object.assign(f.component.draft.files[0], { name: 'Tool', localPath: '/local/tool' })
-        f.component.addReceiver()
-        Object.assign(f.component.draft.receivers[0], {
-            architecture: 'x86_64',
-            localPath: '/local/trz',
-        })
-        f.component.draft.receiverPath = '~/bin/trz'
+        f.component.draft.receiverDirectory = '~/bin'
         f.component.draft.chunkDelayMs = 20
         f.component.draft.timeoutMs = 90000
 
@@ -78,9 +89,11 @@ describe('settings persistence with Tabby ConfigProxy', () => {
 
         // Unsaved edits must remain isolated from the live configuration.
         f.component.draft.files[0].name = 'Unsaved edit'
-        f.component.draft.receivers[0].note = 'Unsaved note'
         expect(f.settings.files[0].name).toBe('Tool')
-        expect(f.settings.receivers[0].note).toBe('')
+        expect(f.component.receiverVersion).toBe('v1.3.0')
+        expect(f.component.receiverCachePath).toBe(
+            '/tmp/tabby-custom/push-toolkit/receivers/v1.3.0',
+        )
     })
 
     it('leaves live settings unchanged when validation fails', async () => {
@@ -93,13 +106,117 @@ describe('settings persistence with Tabby ConfigProxy', () => {
         expect(f.save).not.toHaveBeenCalled()
     })
 
+    it('rejects a relative tool directory before saving', async () => {
+        const f = fixture()
+        f.component.draft.receiverDirectory = 'bin'
+        await f.component.save()
+        expect(f.component.error).toContain('远端路径')
+        expect(f.save).not.toHaveBeenCalled()
+    })
+
     it('reports persistence errors and keeps the draft available for retry', async () => {
         const f = fixture()
         f.save.mockRejectedValueOnce(new Error('Cannot write config'))
-        f.component.draft.receiverPath = '~/bin/trz'
+        f.component.draft.receiverDirectory = '~/bin'
         await f.component.save()
         expect(f.component.error).toBe('Cannot write config')
         expect(f.component.saved).toBe(false)
-        expect(f.component.draft.receiverPath).toBe('~/bin/trz')
+        expect(f.component.draft.receiverDirectory).toBe('~/bin')
+    })
+})
+
+describe('receiver download settings', () => {
+    it('saves custom sources and uses the selected source before the built-in backups', async () => {
+        const f = fixture()
+        f.component.addDownloadSource()
+        const source = f.component.draft.receiverCustomSources[0]
+        source.name = '内网镜像'
+        source.url = 'https://mirror.example.com/trzsz-v1.3.0-all-platform.tar.gz'
+        await f.component.save()
+        expect(f.component.error).toBe('')
+        expect(f.persisted()?.receiverDownloadSource).toBe(source.id)
+        expect(receiverDownloadURLs(f.component.draft)).toEqual([
+            source.url,
+            ...RECEIVER_SOURCES.map((builtin) => builtin.url),
+        ])
+        source.url = 'https://unsaved.example.com/file'
+        expect(f.settings.receiverCustomSources[0].url).toContain('mirror.example.com')
+        f.component.removeDownloadSource(0)
+        expect(f.component.draft.receiverDownloadSource).toBe('github')
+    })
+
+    it('uses Gitee first when selected and rejects invalid sources', () => {
+        expect(receiverDownloadURLs({ ...defaults, receiverDownloadSource: 'gitee' })).toEqual([
+            RECEIVER_SOURCES[1].url,
+            RECEIVER_SOURCES[0].url,
+        ])
+        expect(() =>
+            receiverDownloadURLs({ ...defaults, receiverDownloadSource: 'missing' }),
+        ).toThrow('请选择')
+        for (const url of ['', 'relative/path', 'file:///tmp/archive', 'javascript:alert(1)']) {
+            expect(() =>
+                receiverDownloadURLs({
+                    receiverDownloadSource: 'custom',
+                    receiverCustomSources: [{ id: 'custom', name: '自定义源', url }],
+                }),
+            ).toThrow()
+        }
+    })
+
+    it('opens the cache directory after creating it if necessary', async () => {
+        const mkdir = vi.spyOn(fs, 'mkdir').mockResolvedValue(undefined)
+        const f = fixture()
+        await f.component.openCacheDirectory()
+        expect(mkdir).toHaveBeenCalledWith(f.component.receiverCachePath, { recursive: true })
+        expect(f.platform.openPath).toHaveBeenCalledWith(f.component.receiverCachePath)
+    })
+
+    it('reports a cache directory failure without opening it', async () => {
+        vi.spyOn(fs, 'mkdir').mockRejectedValueOnce(new Error('Permission denied'))
+        const f = fixture()
+        await f.component.openCacheDirectory()
+        expect(f.component.error).toBe('Permission denied')
+        expect(f.platform.openPath).not.toHaveBeenCalled()
+    })
+
+    it('prefetches using the draft selection without saving unrelated edits or requiring SSH', async () => {
+        const f = fixture()
+        f.component.draft.receiverDownloadSource = 'gitee'
+        f.component.addFile()
+        await f.component.predownload()
+        expect(f.receivers.prefetch).toHaveBeenCalledWith(
+            f.component.draft,
+            expect.any(AbortSignal),
+            expect.any(Function),
+        )
+        expect(f.component.downloadStatus).toContain('已缓存')
+        expect(f.component.downloading).toBe(false)
+        expect(f.component.downloadError).toBe('')
+        expect(f.save).not.toHaveBeenCalled()
+        expect(f.settings.receiverDownloadSource).toBe('github')
+    })
+
+    it('shows failures and supports cancellation without duplicate requests', async () => {
+        const f = fixture()
+        f.receivers.prefetch.mockImplementation(
+            async (_settings, signal, status) =>
+                new Promise((_resolve, reject) => {
+                    status('正在下载…')
+                    signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+                }),
+        )
+        const pending = f.component.predownload()
+        expect(f.component.downloading).toBe(true)
+        expect(f.component.downloadStatus).toBe('正在下载…')
+        await f.component.predownload()
+        expect(f.receivers.prefetch).toHaveBeenCalledOnce()
+        f.component.cancelPredownload()
+        await pending
+        expect(f.component.downloadError).toContain('取消')
+        expect(f.component.downloading).toBe(false)
+
+        f.receivers.prefetch.mockRejectedValueOnce(new Error('All sources unavailable'))
+        await f.component.predownload()
+        expect(f.component.downloadError).toBe('All sources unavailable')
     })
 })

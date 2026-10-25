@@ -10,6 +10,7 @@ import { PushSettings, SavedFile, validateName, validateSettings } from './model
 import { remotePath, receiverLocation } from './shell'
 import { PushOperation, TransferClient } from './operation'
 import { PushMiddleware, PushInputLock } from './middleware'
+import { ReceiverService } from './receiver.service'
 
 export type PushTerminal = BaseTerminalTabComponent<BaseTerminalProfile> & {
     trzsz?: TransferClient
@@ -40,6 +41,7 @@ export class PushService {
         private config: ConfigService,
         private notifications: NotificationsService,
         hotkeys: HotkeysService,
+        private receivers: ReceiverService,
     ) {
         hotkeys.hotkey$.subscribe((key) => {
             if (key === 'ctrl-c') {
@@ -87,7 +89,7 @@ export class PushService {
             validateSettings(settings)
             const source = localPath(file.localPath)
             const name = validateName(file.remoteName || path.basename(source))
-            receiverLocation(settings.receiverPath)
+            receiverLocation(settings.receiverDirectory)
             remotePath(file.remoteDirectory)
             const stat = await fs.stat(source)
             if (!stat.isFile()) throw new Error('常用文件条目必须指向普通文件。')
@@ -101,7 +103,7 @@ export class PushService {
             const operation = new PushOperation(
                 {
                     token: randomBytes(16).toString('hex'),
-                    receiverPath: settings.receiverPath,
+                    receiverDirectory: settings.receiverDirectory,
                     destination: file.remoteDirectory,
                     filename: name,
                     fileSize,
@@ -109,13 +111,17 @@ export class PushService {
                     overwrite: !!file.overwrite,
                     localPath: snapshot,
                     settings,
-                    loadReceiver: async (receiver) => {
-                        const receiverFile = localPath(receiver.localPath)
-                        const info = await fs.stat(receiverFile)
-                        if (!info.isFile())
-                            throw new Error('接收端路径必须指向解压后的 trz 普通文件。')
-                        return fs.readFile(receiverFile)
-                    },
+                    loadReceiver: (platform, architecture, signal) =>
+                        this.receivers.load(
+                            platform,
+                            architecture,
+                            signal,
+                            (status) => {
+                                job.status = status
+                                void tab.write(`\r\n[Push Toolkit] ${status}\r\n`)
+                            },
+                            settings,
+                        ),
                     status: (status) => {
                         job.status = status
                         void tab.write(`\r\n[Push Toolkit] ${status}\r\n`)

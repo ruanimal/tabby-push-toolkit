@@ -9,6 +9,7 @@ import { TransferClient } from './operation'
 
 export async function publishedClient(
     send: (data: Buffer) => void,
+    downloadDirectory?: string,
 ): Promise<TransferClient & { processServerOutput(data: Buffer): void }> {
     const require = createRequire(import.meta.url)
     let metadata: any
@@ -91,7 +92,7 @@ export async function publishedClient(
         sessionChanged$: new Subject(),
     }
     const decorator = new Provider(
-        { store: { trzszPlugin: {} } },
+        { store: { trzszPlugin: { defaultDownloadPath: downloadDirectory } } },
         { hotkey$: new Subject() },
         {},
         {},

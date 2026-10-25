@@ -1,9 +1,13 @@
-import { Component } from '@angular/core'
-import { ConfigService } from 'tabby-core'
+import { Component, OnDestroy } from '@angular/core'
+import { ConfigService, PlatformService } from 'tabby-core'
 import { ElectronHostWindow, ElectronService } from 'tabby-electron'
 import { randomBytes } from 'crypto'
+import { promises as fs } from 'fs'
 import { defaults, PushSettings, validateName, validateSettings } from './models'
 import { remotePath, receiverLocation } from './shell'
+import { RECEIVER_VERSION, RECEIVER_RELEASE_URL, receiverCacheDirectory } from './receiver-cache'
+import { RECEIVER_ARCHIVE, RECEIVER_SOURCES } from './receiver-release'
+import { ReceiverService } from './receiver.service'
 
 @Component({
     host: { '(input)': 'saved = false', '(change)': 'saved = false' },
@@ -15,7 +19,7 @@ import { remotePath, receiverLocation } from './shell'
         </p>
         <p class="text-muted">
             已包含 tabby-trzsz，无需另外安装。优先使用远端已安装的
-            trz；仅在远端没有可用接收端时，才需要配置本地引导文件。
+            trz；需要引导时自动下载固定版本，无需手动选择平台或本地文件。
         </p>
 
         <h4>常用文件</h4>
@@ -58,62 +62,90 @@ import { remotePath, receiverLocation } from './shell'
         </section>
         <button class="btn btn-secondary" (click)="addFile()">添加常用文件</button>
 
-        <h4>引导接收端（可选）</h4>
+        <h4>接收端</h4>
         <p class="text-muted">
-            远端已经安装 trz 时可以跳过本节。需要引导时，按远端 uname -s / uname -m
-            匹配，不能使用本机架构代替。每个平台与架构只能配置一个接收端。上传的是 trz
-            可执行文件，不是 tar.gz 压缩包，也不是 trzsz 包装程序。
+            固定使用
+            <a [href]="receiverReleaseURL" (click)="openRelease($event)"
+                >trzsz-rs {{ receiverVersion }}</a
+            >。下载全平台压缩包并按内置清单校验，需要引导时自动提取对应平台的 trz 和 tsz，
+            一起安装到下方指定的目录。Linux 使用静态 musl 版本。
         </p>
-        <section *ngFor="let receiver of draft.receivers; let i = index">
-            <label
-                >平台<input
-                    class="form-control"
-                    [(ngModel)]="receiver.platform"
-                    placeholder="Linux"
-                    aria-label="接收端平台"
-            /></label>
-            <label
-                >架构<input
-                    class="form-control"
-                    [(ngModel)]="receiver.architecture"
-                    placeholder="x86_64 / aarch64 / armv7l"
-                    aria-label="接收端架构"
-            /></label>
-            <label
-                >本地 trz 文件
-                <div class="path-row">
-                    <input
-                        class="form-control"
-                        [(ngModel)]="receiver.localPath"
-                        aria-label="本地接收端"
-                    /><button class="btn btn-secondary" (click)="pickFile(receiver)">浏览…</button>
-                </div></label
+        <p>
+            压缩包缓存目录：<code>{{ receiverCachePath }}</code>
+            <button class="btn btn-secondary btn-sm" (click)="openCacheDirectory()">
+                打开缓存目录
+            </button>
+        </p>
+        <p class="text-muted">
+            预下载会展开总包，将各平台压缩包分别缓存。可自行将 {{ receiverArchive }}
+            或对应平台压缩包放入此目录，使用前会按内置 SHA-256 校验。
+        </p>
+        <label
+            >接收端下载源
+            <select
+                class="form-control"
+                [(ngModel)]="draft.receiverDownloadSource"
+                aria-label="接收端下载源"
+                [disabled]="downloading"
             >
+                <option *ngFor="let source of builtinSources" [ngValue]="source.id">
+                    {{ source.name }}
+                </option>
+                <option *ngFor="let source of draft.receiverCustomSources" [ngValue]="source.id">
+                    {{ source.name }}
+                </option>
+            </select>
+        </label>
+        <section *ngFor="let source of draft.receiverCustomSources; let i = index">
             <label
-                >备注<input
+                >下载源名称<input
                     class="form-control"
-                    [(ngModel)]="receiver.note"
-                    placeholder="例如 Linux x86_64 musl 静态版"
-                    aria-label="接收端备注"
+                    [(ngModel)]="source.name"
+                    aria-label="下载源名称"
             /></label>
-            <button class="btn btn-danger btn-sm" (click)="draft.receivers.splice(i, 1)">
-                删除接收端
+            <label
+                >全平台压缩包地址<input
+                    class="form-control"
+                    [(ngModel)]="source.url"
+                    placeholder="https://example.com/trzsz-v1.3.0-all-platform.tar.gz"
+                    aria-label="全平台压缩包地址"
+            /></label>
+            <button
+                class="btn btn-danger btn-sm"
+                (click)="removeDownloadSource(i)"
+                [disabled]="downloading"
+            >
+                删除下载源
             </button>
         </section>
-        <button class="btn btn-secondary" (click)="addReceiver()">添加接收端</button>
-
-        <h4>传输设置</h4>
+        <button class="btn btn-secondary" (click)="addDownloadSource()" [disabled]="downloading">
+            添加自定义下载源
+        </button>
+        <p class="text-muted">
+            默认优先 GitHub，失败后尝试 Gitee。选择其他源后会优先使用该源，失败时尝试其余内置源。
+            自定义地址需提供同一版本的全平台压缩包。
+        </p>
+        <button class="btn btn-secondary" (click)="predownload()" [disabled]="downloading">
+            {{ downloading ? '正在预下载…' : '预下载接收端' }}
+        </button>
+        <button *ngIf="downloading" class="btn btn-secondary" (click)="cancelPredownload()">
+            取消预下载
+        </button>
+        <p *ngIf="downloadStatus" role="status">{{ downloadStatus }}</p>
+        <p *ngIf="downloadError" class="text-danger" role="alert">{{ downloadError }}</p>
         <label
-            >远端 trz 命令或路径<input
+            >远端工具目录<input
                 class="form-control"
-                [(ngModel)]="draft.receiverPath"
-                placeholder="trz（留空自动检测）"
-                aria-label="远端接收端路径"
+                [(ngModel)]="draft.receiverDirectory"
+                placeholder="~/.local/bin"
+                aria-label="远端工具目录"
         /></label>
         <p class="text-muted">
-            支持 trz、/usr/local/bin/trz、~/bin/trz。先检查指定命令或路径，再查找 PATH 中的 trz
-            和工具包已引导的接收端；这些都不可用时才使用本地引导文件。
+            默认 ~/.local/bin，支持以 / 或 ~/ 开头的目录。优先检测该目录中的 trz，再检查 PATH 中的
+            trz。需要引导时将 trz、tsz 一起安装到该目录，目录不存在时自动创建， 并将其加入当前会话
+            PATH。已有缓存时无需重复下载。
         </p>
+        <h4>传输设置</h4>
         <label
             >引导分块间隔（毫秒）<input
                 class="form-control"
@@ -183,19 +215,84 @@ import { remotePath, receiverLocation } from './shell'
         `,
     ],
 })
-export class PushSettingsComponent {
+export class PushSettingsComponent implements OnDestroy {
     draft: PushSettings
     error = ''
     saved = false
+    downloading = false
+    downloadStatus = ''
+    downloadError = ''
+    private downloadController?: AbortController
+    readonly builtinSources = RECEIVER_SOURCES
+    readonly receiverArchive = RECEIVER_ARCHIVE
+    readonly receiverVersion = RECEIVER_VERSION
+    readonly receiverReleaseURL = RECEIVER_RELEASE_URL
+    readonly receiverCachePath: string
 
     constructor(
         private config: ConfigService,
         private electron: ElectronService,
         private hostWindow: ElectronHostWindow,
+        private platform: PlatformService,
+        private receivers: ReceiverService,
     ) {
         this.draft = JSON.parse(
             JSON.stringify({ ...defaults, ...config.store.pushToolkit }),
         ) as PushSettings
+        this.receiverCachePath = receiverCacheDirectory(platform.getConfigPath())
+    }
+
+    ngOnDestroy(): void {
+        this.downloadController?.abort(new Error('预下载已取消。'))
+    }
+
+    addDownloadSource(): void {
+        this.saved = false
+        const id = randomBytes(8).toString('hex')
+        this.draft.receiverCustomSources.push({ id, name: '自定义源', url: '' })
+        this.draft.receiverDownloadSource = id
+    }
+
+    removeDownloadSource(index: number): void {
+        const [removed] = this.draft.receiverCustomSources.splice(index, 1)
+        if (removed?.id === this.draft.receiverDownloadSource)
+            this.draft.receiverDownloadSource = 'github'
+        this.saved = false
+    }
+
+    async openCacheDirectory(): Promise<void> {
+        this.error = ''
+        try {
+            await fs.mkdir(this.receiverCachePath, { recursive: true })
+            await this.platform.openPath(this.receiverCachePath)
+        } catch (error) {
+            this.error = error instanceof Error ? error.message : String(error)
+        }
+    }
+
+    async predownload(): Promise<void> {
+        if (this.downloading) return
+        this.downloading = true
+        this.downloadStatus = '准备预下载…'
+        this.downloadError = ''
+        const controller = new AbortController()
+        this.downloadController = controller
+        try {
+            await this.receivers.prefetch(this.draft, controller.signal, (status) => {
+                this.downloadStatus = status
+            })
+            this.downloadStatus = '总包已展开，各平台压缩包已缓存，可离线使用。'
+        } catch (error) {
+            this.downloadStatus = ''
+            this.downloadError = error instanceof Error ? error.message : String(error)
+        } finally {
+            this.downloading = false
+            this.downloadController = undefined
+        }
+    }
+
+    cancelPredownload(): void {
+        this.downloadController?.abort(new Error('预下载已取消。'))
     }
 
     addFile(): void {
@@ -211,15 +308,9 @@ export class PushSettingsComponent {
         })
     }
 
-    addReceiver(): void {
-        this.saved = false
-        this.draft.receivers.push({
-            id: randomBytes(8).toString('hex'),
-            platform: 'Linux',
-            architecture: '',
-            localPath: '',
-            note: '',
-        })
+    openRelease(event: Event): void {
+        event.preventDefault()
+        this.platform.openExternal(this.receiverReleaseURL)
     }
 
     async pickFile(item: { localPath: string }): Promise<void> {
@@ -242,16 +333,11 @@ export class PushSettingsComponent {
         this.saved = false
         try {
             validateSettings(this.draft)
-            receiverLocation(this.draft.receiverPath)
+            receiverLocation(this.draft.receiverDirectory)
             for (const file of this.draft.files) {
                 if (!file.localPath.trim()) throw new Error('常用文件的本地路径不能为空。')
                 remotePath(file.remoteDirectory)
                 if (file.remoteName) validateName(file.remoteName)
-            }
-            for (const receiver of this.draft.receivers) {
-                if (!receiver.localPath.trim()) continue
-                if (!receiver.platform.trim() || !receiver.architecture.trim())
-                    throw new Error('选择本地引导文件后，请填写对应的平台和架构。')
             }
             // ConfigProxy structural sections are getter-only; update their leaf setters.
             // Clone the draft so later unsaved edits cannot mutate the live configuration.

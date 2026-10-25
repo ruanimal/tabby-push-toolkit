@@ -1,3 +1,5 @@
+import { RECEIVER_SOURCES, ReceiverDownloadSource } from './receiver-release'
+
 export interface SavedFile {
     id: string
     name: string
@@ -8,28 +10,22 @@ export interface SavedFile {
     overwrite: boolean
 }
 
-export interface Receiver {
-    id: string
-    platform: string
-    architecture: string
-    localPath: string
-    note: string
-}
-
 export interface PushSettings {
     files: SavedFile[]
-    receivers: Receiver[]
-    receiverPath: string
+    receiverDirectory: string
+    receiverDownloadSource: string
+    receiverCustomSources: ReceiverDownloadSource[]
     chunkDelayMs: number
     timeoutMs: number
 }
 
-export const DEFAULT_BOOTSTRAP_PATH = '~/.local/lib/tabby-push-toolkit/trz'
+export const DEFAULT_RECEIVER_DIRECTORY = '~/.local/bin'
 
 export const defaults: PushSettings = {
     files: [],
-    receivers: [],
-    receiverPath: 'trz',
+    receiverDirectory: DEFAULT_RECEIVER_DIRECTORY,
+    receiverDownloadSource: 'github',
+    receiverCustomSources: [],
     chunkDelayMs: 10,
     timeoutMs: 60000,
 }
@@ -46,25 +42,6 @@ export function canonicalArchitecture(value: string): string {
     )
 }
 
-export function selectReceiver(
-    receivers: Receiver[],
-    platform: string,
-    architecture: string,
-): Receiver {
-    const candidates = receivers.filter(
-        (r) =>
-            !!r.localPath.trim() &&
-            r.platform.trim().toLowerCase() === platform.toLowerCase() &&
-            canonicalArchitecture(r.architecture) === canonicalArchitecture(architecture),
-    )
-    if (candidates.length !== 1) {
-        throw new Error(
-            `未找到可用的已安装 trz，且远端平台 ${platform}/${architecture} 有 ${candidates.length} 个匹配的引导文件。请设置已安装 trz 的路径，或配置唯一匹配的本地接收端文件。`,
-        )
-    }
-    return candidates[0]
-}
-
 export function validateName(name: string): string {
     if (!name || name === '.' || name === '..' || /[\\/\x00-\x1f\x7f]/.test(name)) {
         throw new Error('目标文件名必须是单个文件名，不能包含斜线或控制字符。')
@@ -73,6 +50,7 @@ export function validateName(name: string): string {
 }
 
 export function validateSettings(settings: PushSettings): void {
+    receiverDownloadURLs(settings)
     if (
         !Number.isInteger(settings.chunkDelayMs) ||
         settings.chunkDelayMs < 0 ||
@@ -87,11 +65,30 @@ export function validateSettings(settings: PushSettings): void {
     ) {
         throw new Error('阶段超时必须为 1000–3600000 毫秒。')
     }
-    const platforms = new Set<string>()
-    for (const receiver of settings.receivers) {
-        if (!receiver.localPath.trim()) continue
-        const key = `${receiver.platform.trim().toLowerCase()}/${canonicalArchitecture(receiver.architecture)}`
-        if (platforms.has(key)) throw new Error(`接收端配置重复：${key}`)
-        platforms.add(key)
+}
+export type ReceiverSourceSettings = Pick<
+    PushSettings,
+    'receiverDownloadSource' | 'receiverCustomSources'
+>
+
+export function receiverDownloadURLs(settings: ReceiverSourceSettings): string[] {
+    const ids = new Set(RECEIVER_SOURCES.map((source) => source.id))
+    for (const source of settings.receiverCustomSources) {
+        if (!source.id || ids.has(source.id)) throw new Error('下载源标识不能重复。')
+        ids.add(source.id)
+        if (!source.name.trim()) throw new Error('请填写自定义下载源名称。')
+        let url: URL
+        try {
+            url = new URL(source.url)
+        } catch {
+            throw new Error('自定义下载源必须填写完整的 HTTP 或 HTTPS 压缩包地址。')
+        }
+        if (!['http:', 'https:'].includes(url.protocol))
+            throw new Error('自定义下载源仅支持 HTTP 或 HTTPS 地址。')
     }
+    const selected = [...RECEIVER_SOURCES, ...settings.receiverCustomSources].find(
+        (source) => source.id === settings.receiverDownloadSource,
+    )
+    if (!selected) throw new Error('请选择有效的接收端下载源。')
+    return [...new Set([selected.url, ...RECEIVER_SOURCES.map((source) => source.url)])]
 }

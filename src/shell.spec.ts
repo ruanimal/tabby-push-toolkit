@@ -2,13 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'child_process'
 import { readFileSync } from 'fs'
 import { quote, remotePath, receiverLocation, adler32 } from './shell'
-import {
-    defaults,
-    DEFAULT_BOOTSTRAP_PATH,
-    selectReceiver,
-    validateName,
-    validateSettings,
-} from './models'
+import { defaults, validateName, validateSettings } from './models'
 
 describe('shell paths and receiver selection', () => {
     it('quotes metacharacters literally while expanding only a home prefix', () => {
@@ -26,37 +20,28 @@ describe('shell paths and receiver selection', () => {
             expect(() => validateName(name)).toThrow()
     })
 
-    it('uses the remote architecture and rejects missing or ambiguous matches', () => {
-        const receivers = [
-            { id: 'a', platform: 'Linux', architecture: 'amd64', localPath: '/trz', note: '' },
-        ]
-        expect(selectReceiver(receivers, 'Linux', 'x86_64')).toBe(receivers[0])
-        expect(() => selectReceiver(receivers, 'Linux', 'aarch64')).toThrow()
-        expect(() => selectReceiver([...receivers, ...receivers], 'Linux', 'x86_64')).toThrow()
+    it('rejects invalid transfer timing settings', () => {
         expect(() => validateSettings({ ...defaults, chunkDelayMs: NaN })).toThrow()
         expect(() => validateSettings({ ...defaults, timeoutMs: 0 })).toThrow()
     })
 
-    it('accepts installed command names, explicit paths and automatic detection', () => {
-        expect(receiverLocation('trz')).toEqual({
-            command: quote('trz'),
-            bootstrapPath: remotePath(DEFAULT_BOOTSTRAP_PATH),
-        })
-        expect(receiverLocation('')).toEqual(receiverLocation('trz'))
-        for (const location of ['/opt/trz tools/trz', '~/bin/trz']) {
+    it('uses the configured directory for detection and installation', () => {
+        expect(defaults.receiverDirectory).toBe('~/.local/bin')
+        expect(receiverLocation('').command).toBe(remotePath('~/.local/bin/trz'))
+        for (const location of ["/opt/trz tools ' $HOME", '~/bin', '~', '/bin/trz']) {
             expect(receiverLocation(location)).toEqual({
-                command: remotePath(location),
-                bootstrapPath: remotePath(location),
+                directory: remotePath(location),
+                command: remotePath(`${location}/trz`),
             })
         }
-        for (const command of [
-            'trz; echo injected',
-            'trz --flag',
-            '$(trz)',
-            'relative/trz',
-            'trz\n',
-        ]) {
-            expect(() => receiverLocation(command)).toThrow()
+        expect(receiverLocation('/')).toEqual({
+            directory: remotePath('/'),
+            command: remotePath('/trz'),
+        })
+        expect(receiverLocation('~/')).toEqual(receiverLocation('~'))
+        expect(receiverLocation('~/bin///')).toEqual(receiverLocation('~/bin'))
+        for (const directory of ['trz', 'trz; echo injected', 'relative/dir', '~/bad\npath']) {
+            expect(() => receiverLocation(directory)).toThrow()
         }
     })
 })

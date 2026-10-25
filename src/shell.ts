@@ -1,4 +1,4 @@
-import { DEFAULT_BOOTSTRAP_PATH } from './models'
+import { DEFAULT_RECEIVER_DIRECTORY } from './models'
 
 export function quote(value: string): string {
     if (/[\x00-\x1f\x7f]/.test(value)) throw new Error('路径不能包含控制字符。')
@@ -13,16 +13,13 @@ export function remotePath(value: string): string {
     return quote(value)
 }
 
-/** A receiver may be a PATH command or a remote path; never interpret shell arguments. */
-export function receiverLocation(value: string): { command: string; bootstrapPath: string } {
-    if (value.startsWith('/') || value.startsWith('~/')) {
-        const location = remotePath(value)
-        return { command: location, bootstrapPath: location }
+/** Detection and bootstrap always use the same directory. */
+export function receiverLocation(value: string): { directory: string; command: string } {
+    const directory = (value || DEFAULT_RECEIVER_DIRECTORY).replace(/\/+$/, '') || '/'
+    return {
+        directory: remotePath(directory),
+        command: remotePath(`${directory === '/' ? '' : directory}/trz`),
     }
-    if (value && !/^[a-zA-Z0-9_][a-zA-Z0-9_.+-]*$/.test(value)) {
-        throw new Error('接收端可填写命令名（如 trz）、以 / 或 ~/ 开头的路径，或留空自动检测。')
-    }
-    return { command: quote(value || 'trz'), bootstrapPath: remotePath(DEFAULT_BOOTSTRAP_PATH) }
 }
 
 export function adler32(data: Uint8Array): [number, number] {

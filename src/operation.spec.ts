@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process'
 import { promises as fs } from 'fs'
 import * as os from 'os'
@@ -6,10 +6,12 @@ import * as path from 'path'
 import { createRequire } from 'module'
 import { randomBytes } from 'crypto'
 import { TrzszFilter } from 'trzsz'
-import { defaults, DEFAULT_BOOTSTRAP_PATH } from './models'
+import { defaults, DEFAULT_RECEIVER_DIRECTORY } from './models'
 import { quote } from './shell'
 import { OperationOptions, PushOperation, TransferClient } from './operation'
 import { publishedClient } from './published-client.test-helper'
+import { ReceiverCache, receiverCacheDirectory } from './receiver-cache'
+import { RECEIVER_ARCHIVE } from './receiver-release'
 
 const require = createRequire(import.meta.url)
 const resources: { root: string; child: ChildProcessWithoutNullStreams }[] = []
@@ -32,6 +34,7 @@ async function fixture(
         overwrite?: boolean
         data?: Buffer
         minimalPath?: boolean
+        receiverDirectory?: string
     } = {},
 ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "push-test ' -"))
@@ -60,27 +63,40 @@ async function fixture(
     const local = path.join(root, filename)
     await fs.writeFile(local, data)
     const destination = path.join(root, "remote ' dir")
-    const receiverPath = path.join(root, 'receiver/trz')
+    const receiverDirectory = options.receiverDirectory ?? DEFAULT_RECEIVER_DIRECTORY
+    const directory = receiverDirectory.startsWith('~/')
+        ? path.join(root, receiverDirectory.slice(2))
+        : receiverDirectory
+    const receiverPath = path.join(directory, 'trz')
     const receiver = options.receiver
         ? await fs.readFile(options.receiver)
         : Buffer.from(
               `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(require.resolve('trzsz/bin/trz.js'))} "$@"\n`,
           )
-    const send = (buffer: Buffer): void => operation.feedFromTerminal(buffer)
+    const sender = Buffer.from(
+        `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(require.resolve('trzsz/bin/tsz.js'))} "$@"\n`,
+    )
+    const downloads = path.join(root, 'downloads')
+    await fs.mkdir(downloads)
+    let managed = true
+    const send = (buffer: Buffer): void => {
+        if (managed) operation.feedFromTerminal(buffer)
+        else child.stdin.write(buffer)
+    }
     const client = options.published
-        ? await publishedClient(send)
+        ? await publishedClient(send, downloads)
         : new TrzszFilter({
               sendToServer: (data) => send(Buffer.from(data)),
               writeToTerminal: () => undefined,
               chooseSendFiles: async () => {
                   throw new Error('Unexpected picker')
               },
-              chooseSaveDirectory: async () => undefined,
+              chooseSaveDirectory: async () => downloads,
           })
     const statuses: string[] = []
     const operationOptions: OperationOptions = {
         token: randomBytes(16).toString('hex'),
-        receiverPath,
+        receiverDirectory,
         destination,
         filename,
         fileSize: data.length,
@@ -91,17 +107,8 @@ async function fixture(
             ...defaults,
             chunkDelayMs: 0,
             timeoutMs: 8000,
-            receivers: [
-                {
-                    id: 'linux',
-                    platform: 'Linux',
-                    architecture: os.arch() === 'x64' ? 'x86_64' : os.arch(),
-                    localPath: '/unused',
-                    note: '',
-                },
-            ],
         },
-        loadReceiver: async () => receiver,
+        loadReceiver: async () => ({ trz: receiver, tsz: sender }),
         status: (status) => statuses.push(status),
     }
     const operation = new PushOperation(operationOptions, client, (buffer) => {
@@ -113,6 +120,10 @@ async function fixture(
     })
     child.stdout.on('data', (buffer: Buffer) => {
         transcript += buffer.toString()
+        if (!managed) {
+            client.processServerOutput(buffer)
+            return
+        }
         // Force a handshake and every status frame to cross SSH output boundaries.
         for (let offset = 0; offset < buffer.length; offset += 7) {
             const output = operation.feedFromSession(buffer.subarray(offset, offset + 7))
@@ -128,8 +139,13 @@ async function fixture(
         destination,
         receiverPath,
         receiver,
+        sender,
         statuses,
         client,
+        downloads,
+        enableManual: () => {
+            managed = false
+        },
         options: operationOptions,
         operation,
         transcript: () => transcript,
@@ -148,6 +164,12 @@ describe('push over a real PTY', () => {
             }
             expect(await fs.readFile(path.join(f.destination, f.filename))).toEqual(f.data)
             expect(await fs.readFile(f.receiverPath)).toEqual(f.receiver)
+            expect(await fs.readFile(path.join(path.dirname(f.receiverPath), 'tsz'))).toEqual(
+                f.sender,
+            )
+            expect(
+                (await fs.stat(path.join(path.dirname(f.receiverPath), 'tsz'))).mode & 0o100,
+            ).toBe(0o100)
             expect((await fs.stat(path.join(f.destination, f.filename))).mode & 0o100).toBe(0o100)
             expect(
                 (await fs.readdir(f.destination)).filter((name) => name.startsWith('.push-')),
@@ -156,19 +178,26 @@ describe('push over a real PTY', () => {
         },
     )
 
-    it('reuses an installed receiver without reading a local bootstrap', async () => {
-        const f = await fixture({ data: Buffer.alloc(0), shell: ['/usr/bin/busybox', 'ash'] })
-        await fs.mkdir(path.dirname(f.receiverPath), { recursive: true })
-        await fs.writeFile(f.receiverPath, f.receiver, { mode: 0o700 })
-        f.options.loadReceiver = async () => {
-            throw new Error('Must reuse existing receiver')
-        }
-        f.options.settings.receivers = []
-        await f.operation.run()
-        expect(await fs.readFile(path.join(f.destination, f.filename))).toEqual(Buffer.alloc(0))
-    })
+    it.each([DEFAULT_RECEIVER_DIRECTORY, "~/custom ' $HOME/bin"])(
+        'prioritizes a receiver in directory %j over PATH without a local bootstrap',
+        async (receiverDirectory) => {
+            const f = await fixture({
+                data: Buffer.alloc(0),
+                shell: ['/usr/bin/busybox', 'ash'],
+                receiverDirectory,
+            })
+            await fs.mkdir(path.dirname(f.receiverPath), { recursive: true })
+            await fs.writeFile(f.receiverPath, f.receiver, { mode: 0o700 })
+            await fs.writeFile(path.join(f.bin, 'trz'), '#!/bin/sh\nexit 99\n', { mode: 0o700 })
+            f.options.loadReceiver = async () => {
+                throw new Error('Must reuse existing receiver')
+            }
+            await f.operation.run()
+            expect(await fs.readFile(path.join(f.destination, f.filename))).toEqual(Buffer.alloc(0))
+        },
+    )
 
-    it.each(['trz', '', 'configured-missing-path'])(
+    it.each(['', '~/custom/bin'])(
         'uses an installed PATH receiver with setting %j and no bootstrap configuration',
         async (configured) => {
             const f = await fixture({ published: true, minimalPath: true })
@@ -178,9 +207,7 @@ describe('push over a real PTY', () => {
                 `#!/bin/sh\n[ "$1" != --version ] || exit 1\n${f.receiver.toString().split('\n').slice(1).join('\n')}`,
             )
             await fs.writeFile(installed, wrapper, { mode: 0o700 })
-            f.options.receiverPath =
-                configured === 'configured-missing-path' ? f.receiverPath : configured
-            f.options.settings.receivers = []
+            f.options.receiverDirectory = configured
             f.options.loadReceiver = async () => {
                 throw new Error('Must use installed trz')
             }
@@ -194,21 +221,117 @@ describe('push over a real PTY', () => {
         },
     )
 
-    it('bootstraps to the managed location when a command name is not installed', async () => {
+    it('bootstraps to the default directory when the setting is empty', async () => {
         const f = await fixture()
-        f.options.receiverPath = 'trz'
+        f.options.receiverDirectory = ''
         await f.operation.run()
-        const managed = path.join(f.root, DEFAULT_BOOTSTRAP_PATH.slice(2))
+        const managed = path.join(f.root, DEFAULT_RECEIVER_DIRECTORY.slice(2), 'trz')
         expect(await fs.readFile(managed)).toEqual(f.receiver)
         expect(await fs.readFile(path.join(f.destination, f.filename))).toEqual(f.data)
     })
 
-    it('only asks for a bootstrap file when no installed receiver is found', async () => {
+    it('installs both commands into a custom directory without using the default directory', async () => {
+        const f = await fixture({ receiverDirectory: "~/custom ' $HOME/bin/" })
+        await f.operation.run()
+        expect(await fs.readFile(f.receiverPath)).toEqual(f.receiver)
+        expect(await fs.readFile(path.join(path.dirname(f.receiverPath), 'tsz'))).toEqual(f.sender)
+        await expect(fs.stat(path.join(f.root, '.local/bin'))).rejects.toThrow()
+        expect(await fs.readFile(path.join(f.destination, f.filename))).toEqual(f.data)
+    })
+
+    it('propagates download failures without committing a receiver', async () => {
         const f = await fixture()
-        f.options.settings.receivers = []
-        await expect(f.operation.run()).rejects.toThrow('请设置已安装 trz 的路径')
+        f.options.loadReceiver = async () => {
+            throw new Error('Download HTTP 404')
+        }
+        await expect(f.operation.run()).rejects.toThrow('Download HTTP 404')
         await expect(fs.stat(f.receiverPath)).rejects.toThrow()
     })
+
+    it('cancels promptly while a receiver download is pending', async () => {
+        const f = await fixture()
+        let downloading!: () => void
+        const started = new Promise<void>((resolve) => {
+            downloading = resolve
+        })
+        f.options.loadReceiver = async (_platform, _architecture, signal) =>
+            new Promise((_resolve, reject) => {
+                signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+                downloading()
+            })
+        const transfer = f.operation.run()
+        await started
+        f.operation.cancel()
+        await expect(transfer).rejects.toThrow('取消')
+        await expect(fs.stat(f.receiverPath)).rejects.toThrow()
+    })
+
+    it.skipIf(!process.env.TRZ_ALL_ARCHIVE)(
+        'extracts the real v1.3.0 release through the cache and uploads with its receiver',
+        async () => {
+            const f = await fixture({
+                published: true,
+                receiverDirectory: "~/release tools ' $HOME/bin/",
+            })
+            const archivePath = process.env.TRZ_ALL_ARCHIVE
+            if (!archivePath) throw new Error('Missing release test fixture')
+            const archive = await fs.readFile(archivePath)
+            const directory = receiverCacheDirectory(
+                path.join(f.root, 'tabby-config', 'config.yaml'),
+            )
+            const download = vi.fn(async () => archive)
+            const cache = new ReceiverCache(directory, download)
+            f.options.loadReceiver = (platform, architecture, signal) =>
+                cache.get(platform, architecture, signal, (status) => f.statuses.push(status))
+            try {
+                await f.operation.run()
+            } catch (error) {
+                throw new Error(`${error}\n${f.transcript().slice(-4000)}`)
+            }
+            expect(await fs.readFile(path.join(f.destination, f.filename))).toEqual(f.data)
+            expect(
+                (await fs.readFile(path.join(directory, RECEIVER_ARCHIVE))).equals(archive),
+            ).toBe(true)
+            expect(download).toHaveBeenCalledOnce()
+            const offline = new ReceiverCache(directory, async () => {
+                throw new Error('Must use cached archive')
+            })
+            expect(
+                await offline.get(
+                    'Linux',
+                    os.arch() === 'x64' ? 'x86_64' : os.arch(),
+                    new AbortController().signal,
+                    () => undefined,
+                ),
+            ).toEqual({
+                trz: await fs.readFile(f.receiverPath),
+                tsz: await fs.readFile(path.join(path.dirname(f.receiverPath), 'tsz')),
+            })
+            // After the worker exits, the parent shell can run tsz directly through PATH.
+            f.enableManual()
+            f.child.stdin.write(`tsz -- ${quote(path.join(f.destination, f.filename))}\n`)
+            const downloaded = path.join(f.downloads, f.filename)
+            const deadline = Date.now() + 8000
+            let complete = false
+            while (Date.now() < deadline) {
+                try {
+                    if (
+                        (await fs.stat(downloaded)).size === f.data.length &&
+                        !f.client.isTransferringFiles()
+                    ) {
+                        complete = true
+                        break
+                    }
+                } catch {
+                    /* wait for the protocol to create the file */
+                }
+                await new Promise((resolve) => setTimeout(resolve, 20))
+            }
+            expect(complete, f.transcript().slice(-2000)).toBe(true)
+            expect(await fs.readFile(downloaded)).toEqual(f.data)
+        },
+        120000,
+    )
 
     it('refuses overwrite and keeps the existing destination intact', async () => {
         const f = await fixture()
@@ -228,6 +351,8 @@ describe('push over a real PTY', () => {
         }
         await expect(f.operation.run()).rejects.toThrow('protocol failed')
         expect(await fs.readFile(target, 'utf8')).toBe('original')
+        await expect(fs.stat(f.receiverPath)).rejects.toThrow()
+        await expect(fs.stat(path.join(path.dirname(f.receiverPath), 'tsz'))).rejects.toThrow()
     })
 
     it('rejects corrupt bootstrap acknowledgements', async () => {
@@ -242,8 +367,10 @@ describe('push over a real PTY', () => {
     it('cancels mid-bootstrap, removes staging files and restores shell input', async () => {
         const f = await fixture()
         // Make the bootstrap span several acknowledged chunks.
-        f.options.loadReceiver = async () =>
-            Buffer.concat([f.receiver, Buffer.from('#' + 'x'.repeat(4096) + '\n')])
+        f.options.loadReceiver = async () => ({
+            trz: Buffer.concat([f.receiver, Buffer.from('#' + 'x'.repeat(4096) + '\n')]),
+            tsz: f.sender,
+        })
         const originalStatus = f.options.status
         f.options.status = (status) => {
             originalStatus(status)
@@ -291,7 +418,7 @@ describe('cancellation before startup', () => {
         const operation = new PushOperation(
             {
                 token: 'a'.repeat(32),
-                receiverPath: '/trz',
+                receiverDirectory: '/tools',
                 destination: '/tmp',
                 filename: 'tool',
                 fileSize: 0,
@@ -299,7 +426,7 @@ describe('cancellation before startup', () => {
                 overwrite: false,
                 localPath: '/tool',
                 settings: defaults,
-                loadReceiver: async () => Buffer.alloc(0),
+                loadReceiver: async () => ({ trz: Buffer.alloc(0), tsz: Buffer.alloc(0) }),
                 status: () => undefined,
             },
             client,

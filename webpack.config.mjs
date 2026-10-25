@@ -17,7 +17,15 @@ export default {
         globalObject: 'this',
     },
     resolve: { extensions: ['.ts', '.js'] },
-    externals: [/^@angular\//, /^@ng-bootstrap\//, /^rxjs/, /^tabby-/, ...builtinModules, /^node:/],
+    externals: [
+        /^@angular\//,
+        /^@ng-bootstrap\//,
+        /^@electron\/remote$/,
+        /^rxjs/,
+        /^tabby-/,
+        ...builtinModules,
+        /^node:/,
+    ],
     module: {
         rules: [
             {
