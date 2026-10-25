@@ -2,6 +2,14 @@
     "name": "tabby-push-toolkit",
     "version": "0.1.0",
     "description": "Push saved files and bootstrap trzsz over an existing Tabby SSH terminal",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/ruanimal/tabby-push-toolkit.git"
+    },
+    "homepage": "https://github.com/ruanimal/tabby-push-toolkit#readme",
+    "bugs": {
+        "url": "https://github.com/ruanimal/tabby-push-toolkit/issues"
+    },
     "keywords": [
         "tabby-plugin",
         "ssh",
