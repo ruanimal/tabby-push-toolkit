@@ -90,6 +90,7 @@ describe('fixed release selection', () => {
         ['Linux', 'armv7l', 'armv7-unknown-linux-musleabihf-upx'],
         ['Linux', 'armv6l', 'arm-unknown-linux-musleabihf-upx'],
         ['Linux', 'i386', 'i686-unknown-linux-musl-upx'],
+        ['Linux', 'mips', 'mips-unknown-linux-musl-upx'],
         ['Linux', 'mipsel', 'mipsel-unknown-linux-musl-upx'],
         ['Linux', 'ppc64le', 'powerpc64le-unknown-linux-musl-upx'],
         ['Linux', 's390x', 's390x-unknown-linux-musl'],

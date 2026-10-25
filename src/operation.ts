@@ -29,6 +29,8 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 function remoteError(code: string): Error {
     const reasons: Record<string, string> = {
+        ENDIANNESS:
+            '无法确定 MIPS 端序；请确保 od 可用且能读取 Shell 的 ELF 文件，或先安装兼容的 trz。',
         EXISTS: '目标文件已存在；请修改文件名或在条目中启用覆盖。',
         TARGET_TYPE: '目标是目录或符号链接；请选择普通文件路径。',
         RECEIVER_EXEC: '接收端无法执行；请检查远端架构、musl/glibc 兼容性和 noexec 挂载。',
@@ -66,6 +68,9 @@ export class PushOperation {
     private stopSeen = false
     private stopped?: () => void
     private remoteStopping = false
+    private upload?: Promise<unknown>
+    private receiverReturned = false
+    private receiverExited?: () => void
     private abortController = new AbortController()
 
     constructor(
@@ -81,7 +86,8 @@ export class PushOperation {
         this.touch()
         try {
             const output = this.parser.feed(data)
-            if (this.phase !== 'transfer') return Buffer.alloc(0)
+            if (this.phase !== 'transfer' || (this.error && this.receiverReturned))
+                return Buffer.alloc(0)
             if (this.handshakeSeen) return output
             // Upstream detects a handshake within a single output buffer. SSH can split it.
             this.handshake = Buffer.concat([this.handshake, output])
@@ -105,6 +111,16 @@ export class PushOperation {
 
     /** Called on the wire side of upstream's middleware, including its generated input. */
     feedFromTerminal(data: Buffer): void {
+        if (this.phase === 'closed') return
+        if (this.error) {
+            if (this.phase === 'transfer' && !this.receiverReturned) {
+                // A handshake may have been queued before cancellation. Stop it as soon as
+                // upstream activates, but allow only its abort frame to reach the raw receiver.
+                this.client.stopTransferringFiles()
+                if (/^#(?:fail|FAIL):[A-Za-z0-9+/=]*\r?\n$/.test(data.toString())) this.write(data)
+            }
+            return
+        }
         if (this.phase === 'kickoff') {
             // uploadFiles first sends Ctrl+C, then a literal trz command. Keep our worker alive
             // and start its configured receiver instead of resolving trz through the shell PATH.
@@ -137,6 +153,13 @@ export class PushOperation {
     }
 
     private onFrame(message: string): void {
+        if (
+            ['RECEIVED', 'SENDER_RECEIVED', 'STOPPED'].includes(message) ||
+            message.startsWith('ERROR:')
+        ) {
+            this.receiverReturned = true
+            this.receiverExited?.()
+        }
         if (message === 'STOPPED') {
             this.stopSeen = true
             this.stopped?.()
@@ -183,9 +206,11 @@ export class PushOperation {
 
     private async transfer(localPath: string, received: string): Promise<void> {
         this.phase = 'kickoff'
+        this.receiverReturned = false
         this.handshakeSeen = false
         this.handshake = Buffer.alloc(0)
         const upload = this.client.uploadFiles([localPath])
+        this.upload = upload
         void upload.catch((error) =>
             this.fail(error instanceof Error ? error : new Error(String(error))),
         )
@@ -308,6 +333,19 @@ export class PushOperation {
             throw failure
         } finally {
             clearTimeout(this.timer)
+            if (this.error && this.phase === 'transfer') {
+                // Let upstream send its abort before interrupting a receiver in raw mode.
+                await this.upload?.catch(() => undefined)
+                if (!this.receiverReturned)
+                    await Promise.race([
+                        new Promise<void>((resolve) => {
+                            this.receiverExited = resolve
+                        }),
+                        delay(1500),
+                    ])
+                this.receiverExited = undefined
+                this.phase = 'bootstrap'
+            }
             if (this.error && !this.stopSeen) {
                 // An interrupt terminates the child worker and runs its cleanup traps.
                 // In a filtered/broken connection cleanup is necessarily best effort.
@@ -319,6 +357,10 @@ export class PushOperation {
                     delay(1500),
                 ])
             }
+            // stopTransferringFiles() cannot cancel upstream's pending startup delay.
+            // Keep the wire/input guards installed until that upload has fully settled,
+            // otherwise its delayed trz command can escape into the user's shell.
+            await this.upload?.catch(() => undefined)
             this.phase = 'closed'
             if (senderDirectory)
                 await fs

@@ -165,8 +165,8 @@ import { ReceiverService } from './receiver.service'
                 aria-label="无响应超时"
         /></label>
         <p class="text-muted">
-            远端至少需要 POSIX sh、mkdir、rm、mv、ln、wc；首次引导额外需要
-            chmod、uname，赋予文件执行权限时需要 chmod。stty
+            远端至少需要 POSIX sh、mkdir、rm、mv、ln、wc；首次引导额外需要 chmod、uname；MIPS
+            引导还需要 od 检测 ELF 端序。赋予文件执行权限时需要 chmod。stty
             可用时自动关闭回显并恢复。需要目录可写并允许执行上传程序。首次引导使用纯 Shell
             解码和逐块确认，耗时取决于接收端体积与链路延迟。
         </p>

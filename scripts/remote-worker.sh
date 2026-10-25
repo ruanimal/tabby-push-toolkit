@@ -46,6 +46,27 @@ if [ "$available" != 1 ] || { [ "$bootstrap_only" = 1 ] && [ "$sender_available"
     command -v uname >/dev/null 2>&1 || fail MISSING_uname
     platform=$(uname -s) || fail UNAME
     architecture=$(uname -m) || fail UNAME
+    case "$platform:$architecture" in
+        Linux:mips|Linux:mipsel)
+            # uname reports mips for both byte orders. Inspect the running shell's ELF header.
+            command -v od >/dev/null 2>&1 || fail MISSING_od
+            detected=
+            for binary in "/proc/$$/exe" "$(command -v sh)" /bin/sh; do
+                # BusyBox can return the bare applet name sh instead of a file path.
+                case "$binary" in /*) ;; *) continue ;; esac
+                header=$(od -A n -t u1 -N 6 "$binary" 2>/dev/null) || continue
+                set -- $header
+                case "$*" in
+                    '127 69 76 70 1 1') detected=mipsel ;;
+                    '127 69 76 70 1 2') detected=mips ;;
+                    *) continue ;;
+                esac
+                break
+            done
+            [ -n "$detected" ] || fail ENDIANNESS
+            architecture=$detected
+            ;;
+    esac
 fi
 report "PROBE:$platform:$architecture:$available:$sender_available"
 IFS= read -r action || fail INPUT
@@ -121,6 +142,8 @@ case "$action" in
             stage_candidate="$receiver_dir/.push-$token"
             mkdir "$stage_candidate" || fail SENDER_STAGE
             file_stage=$stage_candidate
+            IFS= read -r action || fail INPUT
+            [ "$action" = GO ] || fail CANCELLED
             "$receiver" -q -y -B 64K -- "$file_stage"
             rc=$?
             [ "$rc" = 0 ] || fail TRANSFER
