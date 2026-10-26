@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process'
-import { promises as fs } from 'fs'
+import { promises as fs, existsSync } from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { createRequire } from 'module'
@@ -48,7 +48,9 @@ async function fixture(
     if (!options.minimalPath) tools.push('uname')
     if (options.nativeDecoder) tools.push('base64', 'cksum', 'cat')
     for (const tool of tools) {
-        await fs.symlink(`/usr/bin/${tool}`, path.join(bin, tool))
+        // macOS keeps several of these tools in /bin instead of /usr/bin.
+        const executable = existsSync(`/usr/bin/${tool}`) ? `/usr/bin/${tool}` : `/bin/${tool}`
+        await fs.symlink(executable, path.join(bin, tool))
     }
     const child = spawn(
         '/usr/bin/python3',
@@ -102,8 +104,12 @@ async function fixture(
         if (managed) operation.feedFromTerminal(buffer)
         else write(buffer)
     }
+    let terminalOutput = ''
+    const display = (data: Buffer): void => {
+        terminalOutput += data.toString()
+    }
     const client = options.published
-        ? await publishedClient(send, downloads)
+        ? await publishedClient(send, downloads, display)
         : new TrzszFilter({
               sendToServer: (data) => send(Buffer.from(data)),
               writeToTerminal: () => undefined,
@@ -173,13 +179,14 @@ async function fixture(
         operation,
         transcript: () => transcript,
         displayed: () => displayed,
+        terminalOutput: () => terminalOutput,
         inputSizes,
     }
 }
 
 describe('push over a real PTY', () => {
     it.each(['bootstrap-and-upload', 'sender-only', 'upload-only'])(
-        'passes the configured -B value to every receiver for %s',
+        'shows published client progress and passes the configured -B value for %s',
         async (mode) => {
             const f = await fixture({ published: true, nativeDecoder: true })
             const log = path.join(f.root, 'receiver-args.log')
@@ -201,13 +208,21 @@ describe('push over a real PTY', () => {
 
             await f.operation.run()
 
+            const output = f.terminalOutput()
+            expect(output).toMatch(/\b0%/)
+            expect(output).toMatch(/\b100%/)
+            expect(output).toMatch(/\d+(?:\.\d+)?\s+[KMGT]?B\/s/)
+            expect(output).toContain('ETA')
+            if (mode !== 'upload-only') expect(output).toContain('tsz')
+            if (mode !== 'sender-only') expect(output).toContain(f.filename)
+
             const stage = `.push-${f.options.token}`
             const destinations = [
                 ...(mode !== 'upload-only' ? [path.join(path.dirname(f.receiverPath), stage)] : []),
                 ...(mode !== 'sender-only' ? [path.join(f.destination, stage)] : []),
             ]
             expect((await fs.readFile(log, 'utf8')).trimEnd().split('\n')).toEqual(
-                destinations.flatMap((destination) => ['-q', '-y', '-B', '2K', '--', destination]),
+                destinations.flatMap((destination) => ['-y', '-B', '2K', '--', destination]),
             )
             if (mode !== 'sender-only') {
                 expect(await fs.readFile(path.join(f.destination, f.filename))).toEqual(f.data)

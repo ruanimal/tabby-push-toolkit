@@ -116,7 +116,8 @@ case "$action" in
         report SENDER_READY
         IFS= read -r action || fail INPUT
         [ "$action" = GO ] || fail CANCELLED
-        "$receiver" -q -y -B "$receiver_buffer_size" -- "$boot_stage"
+        # Quiet mode also disables the client's progress bar.
+        "$receiver" -y -B "$receiver_buffer_size" -- "$boot_stage"
         rc=$?
         [ "$rc" = 0 ] || fail TRANSFER
         report SENDER_RECEIVED
@@ -158,7 +159,7 @@ case "$action" in
             file_stage=$stage_candidate
             IFS= read -r action || fail INPUT
             [ "$action" = GO ] || fail CANCELLED
-            "$receiver" -q -y -B "$receiver_buffer_size" -- "$file_stage"
+            "$receiver" -y -B "$receiver_buffer_size" -- "$file_stage"
             rc=$?
             [ "$rc" = 0 ] || fail TRANSFER
             report SENDER_RECEIVED
@@ -191,7 +192,7 @@ file_stage=$stage_candidate
 report READY
 IFS= read -r action || fail INPUT
 [ "$action" = GO ] || fail CANCELLED
-"$receiver" -q -y -B "$receiver_buffer_size" -- "$file_stage"
+"$receiver" -y -B "$receiver_buffer_size" -- "$file_stage"
 rc=$?
 [ "$rc" = 0 ] || fail TRANSFER
 report RECEIVED

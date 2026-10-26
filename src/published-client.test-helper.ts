@@ -10,12 +10,13 @@ import { TransferClient } from './operation'
 export async function publishedClient(
     send: (data: Buffer) => void,
     downloadDirectory?: string,
+    display: (data: Buffer) => void = () => undefined,
 ): Promise<TransferClient & { processServerOutput(data: Buffer): void }> {
     const require = createRequire(import.meta.url)
     let metadata: any
     class SessionMiddleware {
-        feedFromSession(_data: Buffer): void {
-            /* display intentionally omitted */
+        feedFromSession(data: Buffer): void {
+            display(data)
         }
         feedFromTerminal(data: Buffer): void {
             send(data)

@@ -16,7 +16,7 @@ Throughout this document, “remote” refers to the target environment in the c
 - Install both `trz` and `tsz` into the configured remote tools directory (default: `~/.local/bin`) and add it to the current terminal session's `PATH`. Bootstrap `trz` over Base64, then upload `tsz` through the protocol; install both only after successful verification.
 - Bootstrap in chunks of at most 768 bytes, acknowledging each chunk's sequence number, cumulative byte count, and checksum. When remote `base64`, `cksum`, and `cat` are available and pass a self-test, use native decoding with POSIX `cksum` checks for each chunk and the complete file; otherwise use pure shell decoding with cumulative Adler-32. Replace the receiver only after confirming the on-disk size and that it can start.
 - Upload with trzsz into a temporary directory and commit the file only after the client protocol succeeds and the remote size matches. Overwriting is disabled by default; when enabled, replacement uses an atomic rename on the same filesystem.
-- Show the current stage and bootstrap progress. View status or cancel from the context menu, or cancel with Ctrl+C. Terminal input is intercepted during transfers to prevent keyboard input from mixing with the file stream.
+- Show the current stage and bootstrap progress. During trzsz uploads and tsz installation, show the filename, progress bar, percentage, transferred size, speed, and ETA in the terminal as space allows. View status or cancel from the context menu, or cancel with Ctrl+C. Terminal input is intercepted during transfers to prevent keyboard input from mixing with the file stream.
 
 ## Installation and dependencies
 
