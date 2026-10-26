@@ -14,7 +14,7 @@ import {
     validateName,
     validateSettings,
 } from './models'
-import { remotePath, receiverLocation } from './shell'
+import { remoteUploadDirectory, receiverLocation } from './shell'
 import { PushOperation, TransferClient } from './operation'
 import { PushMiddleware, PushInputLock } from './middleware'
 import { ReceiverService } from './receiver.service'
@@ -126,7 +126,7 @@ export class PushService {
             if (file) {
                 const source = localPath(file.localPath)
                 name = validateName(file.remoteName || path.basename(source))
-                remotePath(file.remoteDirectory)
+                remoteUploadDirectory(file.remoteDirectory)
                 const stat = await fs.stat(source)
                 if (!stat.isFile()) throw new Error('常用文件条目必须指向普通文件。')
                 temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'tabby-push-'))

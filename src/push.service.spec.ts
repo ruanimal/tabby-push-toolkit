@@ -106,33 +106,36 @@ describe('menu operation timing', () => {
         }
     })
 
-    it('includes file preparation and identifies the selected menu item', async () => {
-        const f = fixture()
-        vi.spyOn(fs, 'stat').mockImplementation(async () => {
-            clock.now += 1000
-            return { isFile: () => true, size: 10 } as Stats
-        })
-        vi.spyOn(fs, 'mkdtemp').mockResolvedValue('/tmp/push-timing-test')
-        vi.spyOn(fs, 'copyFile').mockResolvedValue(undefined)
-        vi.spyOn(fs, 'rm').mockResolvedValue(undefined)
-        runner.run.mockImplementation(async (options) => {
-            clock.now += 500
-            options.onStopped?.()
-        })
-        await f.service.push(f.tab, {
-            name: '诊断工具',
-            localPath: '/local/tool',
-            remoteDirectory: '/remote',
-            remoteName: 'tool',
-        } as SavedFile)
-        expect(f.tab.write).toHaveBeenLastCalledWith(
-            '\r\n[Push Toolkit] 诊断工具耗时：2.50 秒。\r\n',
-        )
-        expect(f.notifications.info).toHaveBeenCalledWith(
-            'Push Toolkit：上传完成',
-            '/remote/tool\n耗时：2.50 秒',
-        )
-    })
+    it.each(['/remote', '.', './'])(
+        'includes file preparation and identifies the selected menu item for %s',
+        async (remoteDirectory) => {
+            const f = fixture()
+            vi.spyOn(fs, 'stat').mockImplementation(async () => {
+                clock.now += 1000
+                return { isFile: () => true, size: 10 } as Stats
+            })
+            vi.spyOn(fs, 'mkdtemp').mockResolvedValue('/tmp/push-timing-test')
+            vi.spyOn(fs, 'copyFile').mockResolvedValue(undefined)
+            vi.spyOn(fs, 'rm').mockResolvedValue(undefined)
+            runner.run.mockImplementation(async (options) => {
+                clock.now += 500
+                options.onStopped?.()
+            })
+            await f.service.push(f.tab, {
+                name: '诊断工具',
+                localPath: '/local/tool',
+                remoteDirectory,
+                remoteName: 'tool',
+            } as SavedFile)
+            expect(f.tab.write).toHaveBeenLastCalledWith(
+                '\r\n[Push Toolkit] 诊断工具耗时：2.50 秒。\r\n',
+            )
+            expect(f.notifications.info).toHaveBeenCalledWith(
+                'Push Toolkit：上传完成',
+                `${remoteDirectory}/tool\n耗时：2.50 秒`,
+            )
+        },
+    )
 
     it.each(['传输失败', '已取消当前操作。'])(
         'also reports timing when the operation ends with %s',

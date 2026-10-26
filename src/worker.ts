@@ -1,6 +1,6 @@
 import decoder from '../scripts/bootstrap-decoder.sh?raw'
 import worker from '../scripts/remote-worker.sh?raw'
-import { quote, remotePath, receiverLocation } from './shell'
+import { quote, remotePath, remoteUploadDirectory, receiverLocation } from './shell'
 import { DEFAULT_RECEIVER_DIRECTORY, defaults, validateReceiverBufferSize } from './models'
 
 export interface WorkerOptions {
@@ -36,7 +36,7 @@ export function workerCommand(options: WorkerOptions): string {
         `bootstrap_sender=${remotePath(senderPath)}`,
         `receiver_buffer_size=${quote(receiverBufferSize)}`,
         `bootstrap_only=${options.bootstrapOnly ? 1 : 0}`,
-        `destination=${options.bootstrapOnly ? "''" : remotePath(options.destination ?? '')}`,
+        `destination=${options.bootstrapOnly ? "''" : remoteUploadDirectory(options.destination ?? '')}`,
         `filename=${quote(options.filename ?? '')}`,
         `file_size=${options.fileSize ?? 0}`,
         `executable=${options.executable ? 1 : 0}`,

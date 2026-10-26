@@ -13,6 +13,12 @@ export function remotePath(value: string): string {
     return quote(value)
 }
 
+/** Upload destinations can also refer to the active remote shell's working directory. */
+export function remoteUploadDirectory(value: string): string {
+    if (value === '.' || value === './') return quote('.')
+    return remotePath(value)
+}
+
 /** Detection and bootstrap always use the same directory. */
 export function receiverLocation(value: string): { directory: string; command: string } {
     const directory = (value || DEFAULT_RECEIVER_DIRECTORY).replace(/\/+$/, '') || '/'

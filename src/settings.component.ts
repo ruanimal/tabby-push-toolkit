@@ -4,7 +4,7 @@ import { ElectronHostWindow, ElectronService } from 'tabby-electron'
 import { randomBytes } from 'crypto'
 import { promises as fs } from 'fs'
 import { defaults, PushSettings, validateName, validateSettings } from './models'
-import { remotePath, receiverLocation } from './shell'
+import { remoteUploadDirectory, receiverLocation } from './shell'
 import { RECEIVER_VERSION, RECEIVER_RELEASE_URL, receiverCacheDirectory } from './receiver-cache'
 import { RECEIVER_ARCHIVE, RECEIVER_SOURCES } from './receiver-release'
 import { ReceiverService } from './receiver.service'
@@ -41,9 +41,12 @@ import { ReceiverService } from './receiver.service'
                 >远端目录<input
                     class="form-control"
                     [(ngModel)]="file.remoteDirectory"
-                    placeholder="~/tools"
+                    placeholder=". 或 ~/tools"
                     aria-label="远端目录"
             /></label>
+            <p class="text-muted">
+                填 . 或 ./ 使用上传时当前 Shell 的工作目录，也支持以 / 或 ~/ 开头的目录。
+            </p>
             <label
                 >目标文件名（留空使用本地文件名）<input
                     class="form-control"
@@ -349,7 +352,7 @@ export class PushSettingsComponent implements OnDestroy {
             receiverLocation(this.draft.receiverDirectory)
             for (const file of this.draft.files) {
                 if (!file.localPath.trim()) throw new Error('常用文件的本地路径不能为空。')
-                remotePath(file.remoteDirectory)
+                remoteUploadDirectory(file.remoteDirectory)
                 if (file.remoteName) validateName(file.remoteName)
             }
             // ConfigProxy structural sections are getter-only; update their leaf setters.

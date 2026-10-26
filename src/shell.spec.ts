@@ -1,10 +1,29 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'child_process'
 import { readFileSync } from 'fs'
-import { quote, remotePath, receiverLocation, adler32, posixCksum } from './shell'
+import {
+    quote,
+    remotePath,
+    remoteUploadDirectory,
+    receiverLocation,
+    adler32,
+    posixCksum,
+} from './shell'
 import { defaults, validateName, validateSettings } from './models'
 
 describe('shell paths and receiver selection', () => {
+    it('accepts the current directory only for upload destinations', () => {
+        for (const directory of ['.', './']) {
+            expect(remoteUploadDirectory(directory)).toBe("'.'")
+            expect(() => remotePath(directory)).toThrow()
+            expect(() => receiverLocation(directory)).toThrow()
+        }
+        for (const directory of ['/tmp', '~/tools', '~', "/tmp/a ' $HOME"])
+            expect(remoteUploadDirectory(directory)).toBe(remotePath(directory))
+        for (const directory of ['', 'tools', './tools', '..', '$PWD', '.\n'])
+            expect(() => remoteUploadDirectory(directory)).toThrow()
+    })
+
     it('quotes metacharacters literally while expanding only a home prefix', () => {
         const path = `/tmp/a ' $(touch /tmp/should-not-exist) " ; #`
         const result = spawnSync('sh', ['-c', `printf '%s' ${quote(path)}`])

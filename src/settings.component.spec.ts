@@ -57,6 +57,19 @@ function fixture() {
 }
 
 describe('settings persistence with Tabby ConfigProxy', () => {
+    it.each(['.', './'])(
+        'saves the current shell directory %j for uploads',
+        async (remoteDirectory) => {
+            const f = fixture()
+            f.component.addFile()
+            Object.assign(f.component.draft.files[0], { localPath: '/local/tool', remoteDirectory })
+            await f.component.save()
+            expect(f.component.error).toBe('')
+            expect(f.component.saved).toBe(true)
+            expect(f.persisted()?.files[0].remoteDirectory).toBe(remoteDirectory)
+        },
+    )
+
     it.each(['~/.local/bin', '', '/usr/local/bin', '~/my tools', '~/tools/trz'])(
         'saves remote tool directory %j without local bootstrap files',
         async (receiverDirectory) => {

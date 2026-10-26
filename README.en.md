@@ -44,7 +44,7 @@ npm --prefix /path/to/tabby/plugins install /absolute/path/to/tabby-push-toolkit
 
 The UI labels below retain their Chinese text so you can match them in the settings and context menu.
 
-1. Open **Settings → Push Toolkit**, add a saved file, and enter its absolute local path and a remote directory such as `~/tools`. Remote directories must start with `/` or `~/`; other shell variables are not expanded. Leave the target filename blank to use the local filename.
+1. Open **Settings → Push Toolkit**, add a saved file, and enter its absolute local path and a remote directory. Use `.` or `./` for the current shell's working directory at upload time, or a directory starting with `/` or `~/`, such as `~/tools`; other shell variables are not expanded. Leave the target filename blank to use the local filename.
 2. **远端工具目录** (Remote tools directory) defaults to `~/.local/bin`; leaving it blank uses the same default. You can change it to a directory such as `/usr/local/bin` or `~/tools/bin`, but it must start with `/` or `~/`. This setting controls where the plugin looks for and installs `trz` and `tsz`.
 3. Select a receiver download source: GitHub is the default, Gitee is the fallback, and custom sources are supported. Click **预下载接收端** (Pre-download receiver) to populate the cache in advance. This requires no open terminal session and does not save other unfinished settings.
 4. Save the settings. Return to a connected terminal session at an idle shell prompt in the target environment, then right-click and select **Push Toolkit → 引导传输端** (Bootstrap transfer tools), or select a saved file directly. If the remote system lacks `trz` or `tsz`, the plugin automatically identifies its platform and downloads, caches, and bootstraps `trzsz-rs v1.3.0`.

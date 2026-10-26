@@ -185,6 +185,37 @@ async function fixture(
 }
 
 describe('push over a real PTY', () => {
+    it.each([
+        { destination: '.', installed: false },
+        { destination: './', installed: false },
+        { destination: '.', installed: true },
+        { destination: './', installed: true },
+    ])(
+        'uploads into the active shell working directory with %j',
+        async ({ destination, installed }) => {
+            const f = await fixture({ published: true, nativeDecoder: true })
+            const directory = path.join(f.root, "shell cwd ' $HOME")
+            await fs.mkdir(directory)
+            if (installed) {
+                await fs.mkdir(path.dirname(f.receiverPath), { recursive: true })
+                await fs.writeFile(f.receiverPath, f.receiver, { mode: 0o700 })
+            }
+            f.options.destination = destination
+            const ready = `CWD_READY_${f.options.token}`
+            f.child.stdin.write(`cd ${quote(directory)}\nprintf '%s\\n' ${quote(ready)}\n`)
+            await vi.waitFor(() => expect(f.transcript()).toContain(`${ready}\r\n`))
+
+            await f.operation.run()
+
+            expect(await fs.readFile(path.join(directory, f.filename))).toEqual(f.data)
+            expect(
+                (await fs.readdir(directory)).filter((name) => name.startsWith('.push-')),
+            ).toEqual([])
+            await expect(fs.stat(path.join(f.destination, f.filename))).rejects.toThrow()
+            expect(f.statuses.at(-1)).toBe('上传完成。')
+        },
+    )
+
     it.each(['bootstrap-and-upload', 'sender-only', 'upload-only'])(
         'shows published client progress and passes the configured -B value for %s',
         async (mode) => {
