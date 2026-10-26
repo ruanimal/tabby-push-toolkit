@@ -1,6 +1,6 @@
 {
     "name": "tabby-push-toolkit",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "description": "Push saved files and bootstrap trzsz over an existing Tabby terminal session",
     "repository": {
         "type": "git",
